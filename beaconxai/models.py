@@ -138,7 +138,7 @@ class TreeStatsClassifier:
     n_classes: int
 
     def logits(self, x: np.ndarray) -> np.ndarray:
-        f = _ts_stat_features(x).reshape(1, -1)
+        f = _anfis_features(x).reshape(1, -1)
         probs = self.model.predict_proba(f)[0]
         return np.log(np.clip(probs, 1e-12, 1.0))
 
@@ -310,13 +310,16 @@ def train_logreg(x_train: np.ndarray, y_train: np.ndarray, max_iter: int = 2000)
 def train_extratrees_stats(
     x_train: np.ndarray,
     y_train: np.ndarray,
-    n_estimators: int = 600,
+    n_estimators: int = 1200,
+    max_features: float | str = 0.7,
+    min_samples_leaf: int = 1,
     random_state: int = 42,
 ) -> TreeStatsClassifier:
-    x_feat = _ts_stat_features(x_train)
+    x_feat = _anfis_features(x_train)
     clf = ExtraTreesClassifier(
         n_estimators=n_estimators,
-        max_features="sqrt",
+        max_features=max_features,
+        min_samples_leaf=min_samples_leaf,
         class_weight="balanced_subsample",
         n_jobs=-1,
         random_state=random_state,

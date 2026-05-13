@@ -52,6 +52,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--anfis-rules", type=int, default=10)
     p.add_argument("--anfis-ridge", type=float, default=0.2)
     p.add_argument("--anfis-max-samples", type=int, default=4000)
+    p.add_argument("--extratrees-estimators", type=int, default=1200)
+    p.add_argument("--extratrees-max-features", type=float, default=0.7)
+    p.add_argument("--extratrees-min-leaf", type=int, default=1)
     p.add_argument("--histgbt-iters", type=int, default=220)
     p.add_argument("--histgbt-lr", type=float, default=0.08)
     p.add_argument("--histgbt-leaves", type=int, default=63)
@@ -85,6 +88,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--enable-composite", action="store_true")
     p.add_argument("--w-beacon", type=float, default=1.6237111199364826)
     p.add_argument("--w-conf", type=float, default=1.9935299447424337)
+    p.add_argument("--w-neg-margin", type=float, default=0.0)
     p.add_argument("--w-rho", type=float, default=0.9335959634678679)
     p.add_argument("--w-nec", type=float, default=0.1718514451102111)
     p.add_argument("--w-ce", type=float, default=0.7323714207898753)
@@ -125,7 +129,13 @@ def main() -> None:
             min_samples_leaf=args.histgbt_min_leaf,
         )
     elif args.model == "extratrees":
-        clf = train_extratrees_stats(x_train, y_train)
+        clf = train_extratrees_stats(
+            x_train,
+            y_train,
+            n_estimators=args.extratrees_estimators,
+            max_features=args.extratrees_max_features,
+            min_samples_leaf=args.extratrees_min_leaf,
+        )
     elif args.model == "logreg":
         clf = train_logreg(x_train, y_train)
     elif args.model == "cnn1d":
@@ -188,6 +198,7 @@ def main() -> None:
         composite_weights = {
             "beacon": args.w_beacon,
             "conf": args.w_conf,
+            "neg_margin": args.w_neg_margin,
             "rho": args.w_rho,
             "nec": args.w_nec,
             "ce": args.w_ce,

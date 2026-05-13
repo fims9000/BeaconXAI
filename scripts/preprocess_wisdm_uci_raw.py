@@ -16,6 +16,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--stride", type=int, default=64)
     p.add_argument("--min-purity", type=float, default=0.85)
     p.add_argument("--train-user-frac", type=float, default=0.7)
+    p.add_argument("--split-mode", choices=["sorted", "random"], default="random")
+    p.add_argument("--seed", type=int, default=42)
     p.add_argument("--merge-tol-ns", type=int, default=40_000_000)
     return p.parse_args()
 
@@ -120,12 +122,22 @@ def main() -> None:
     act_to_id = {a: i for i, a in enumerate(acts)}
 
     n_train = max(1, int(len(users) * args.train_user_frac))
-    train_users = set(users[:n_train])
-    test_users = set(users[n_train:])
+    if args.split_mode == "random":
+        rng = np.random.default_rng(args.seed)
+        shuffled = np.asarray(users, dtype=np.int64).copy()
+        rng.shuffle(shuffled)
+        train_users = set(int(v) for v in shuffled[:n_train])
+        test_users = set(int(v) for v in shuffled[n_train:])
+    else:
+        train_users = set(users[:n_train])
+        test_users = set(users[n_train:])
     overlap = train_users.intersection(test_users)
     if overlap:
         raise RuntimeError(f"Subject split leakage detected: {sorted(overlap)}")
-    print(f"subjects total={len(users)} train={len(train_users)} test={len(test_users)}")
+    print(
+        f"subjects total={len(users)} train={len(train_users)} test={len(test_users)} "
+        f"split_mode={args.split_mode} seed={args.seed}"
+    )
 
     x_train, y_train = [], []
     x_test, y_test = [], []

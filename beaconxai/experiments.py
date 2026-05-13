@@ -106,7 +106,9 @@ def evaluate_error_risk(
             rows.append(RiskEvalRow(i, is_error, 0, "negative_margin", -bs.margin, 0, 0))
 
         for q in q_values:
-            if q < base_cfg.k0:
+            # For q <= k0 there is no refinement/fragility budget left, BEACON
+            # risk degenerates to censored edge-cases; skip such settings.
+            if q <= base_cfg.k0:
                 continue
             cfg = replace(base_cfg, q_max=int(q))
 
@@ -227,10 +229,12 @@ def _add_composite_rows(
     weights: dict[str, float],
 ) -> None:
     conf_map = {r.sample_id: r.risk_score for r in rows if r.method == "confidence" and r.q_max == 0}
+    neg_margin_map = {r.sample_id: r.risk_score for r in rows if r.method == "negative_margin" and r.q_max == 0}
     y_map = {r.sample_id: r.is_error for r in rows if r.method == "confidence" and r.q_max == 0}
 
     w_beacon = float(weights.get("beacon", 1.0))
     w_conf = float(weights.get("conf", 1.0))
+    w_neg_margin = float(weights.get("neg_margin", 0.0))
     w_rho = float(weights.get("rho", 1.0))
     w_nec = float(weights.get("nec", 0.2))
     w_ce = float(weights.get("ce", 0.2))
@@ -245,12 +249,13 @@ def _add_composite_rows(
 
         br_map = {r.sample_id: r for r in br}
         lm_map = {r.sample_id: r for r in lm}
-        ids = sorted(set(br_map).intersection(lm_map).intersection(conf_map))
+        ids = sorted(set(br_map).intersection(lm_map).intersection(conf_map).intersection(neg_margin_map))
         if not ids:
             continue
 
         risk_beacon = np.array([br_map[i].risk_score for i in ids], dtype=np.float64)
         risk_conf = np.array([conf_map[i] for i in ids], dtype=np.float64)
+        risk_neg_margin = np.array([neg_margin_map[i] for i in ids], dtype=np.float64)
         rho = np.array([lm_map[i].rho_b_cost for i in ids], dtype=np.float64)
         nec = np.array([lm_map[i].necessity for i in ids], dtype=np.float64)
         ce = np.array([lm_map[i].counter_evidence_gain for i in ids], dtype=np.float64)
@@ -262,6 +267,7 @@ def _add_composite_rows(
 
         x_beacon = _rank_norm(risk_beacon)
         x_conf = _rank_norm(risk_conf)
+        x_neg_margin = _rank_norm(risk_neg_margin)
         x_rho = _rank_norm(rho)
         x_nec = _rank_norm(nec)
         x_ce = _rank_norm(ce)
@@ -270,6 +276,7 @@ def _add_composite_rows(
         score = (
             w_beacon * x_beacon
             + w_conf * x_conf
+            + w_neg_margin * x_neg_margin
             + w_rho * x_rho
             + w_nec * x_nec
             + w_ce * x_ce
