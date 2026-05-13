@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.cluster import KMeans
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
@@ -89,6 +90,32 @@ class TreeStatsClassifier:
         f = _ts_stat_features(x).reshape(1, -1)
         probs = self.model.predict_proba(f)[0]
         return np.log(np.clip(probs, 1e-12, 1.0))
+
+    def predict(self, x: np.ndarray) -> int:
+        return int(np.argmax(self.logits(x)))
+
+
+@dataclass
+class AnfisStatsClassifier:
+    feat_mean: np.ndarray
+    feat_std: np.ndarray
+    centers: np.ndarray
+    scales: np.ndarray
+    consequents: np.ndarray
+    n_classes: int
+
+    def _phi(self, x: np.ndarray) -> np.ndarray:
+        f = _ts_stat_features(x).astype(np.float64, copy=False).reshape(1, -1)
+        z = (f - self.feat_mean[None, :]) / self.feat_std[None, :]
+        diff = (z[:, None, :] - self.centers[None, :, :]) / self.scales[None, :, :]
+        d2 = np.sum(diff * diff, axis=2)
+        w = np.exp(-0.5 * d2)
+        return w / (np.sum(w, axis=1, keepdims=True) + 1e-12)
+
+    def logits(self, x: np.ndarray) -> np.ndarray:
+        phi = self._phi(x)
+        out = phi @ self.consequents
+        return out[0].astype(np.float64, copy=False)
 
     def predict(self, x: np.ndarray) -> int:
         return int(np.argmax(self.logits(x)))
@@ -217,6 +244,64 @@ def train_extratrees_stats(
     clf.fit(x_feat, y_train)
     n_classes = int(np.max(y_train)) + 1
     return TreeStatsClassifier(model=clf, n_classes=n_classes)
+
+
+def train_anfis_stats(
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    n_rules: int = 12,
+    ridge: float = 1e-2,
+    max_fit_samples: int = 6000,
+    random_state: int = 42,
+) -> AnfisStatsClassifier:
+    x_feat = _ts_stat_features(x_train).astype(np.float64, copy=False)
+    y = y_train.astype(np.int64, copy=False)
+    if max_fit_samples > 0 and len(x_feat) > max_fit_samples:
+        rng = np.random.default_rng(random_state)
+        idx = rng.choice(len(x_feat), size=max_fit_samples, replace=False)
+        x_feat = x_feat[idx]
+        y = y[idx]
+    n_classes = int(np.max(y)) + 1
+
+    feat_mean = x_feat.mean(axis=0)
+    feat_std = x_feat.std(axis=0)
+    feat_std = np.where(feat_std < 1e-8, 1.0, feat_std)
+    z = (x_feat - feat_mean[None, :]) / feat_std[None, :]
+
+    n_rules_eff = int(max(2, min(n_rules, len(z))))
+    km = KMeans(n_clusters=n_rules_eff, random_state=random_state, n_init="auto")
+    labels = km.fit_predict(z)
+    centers = km.cluster_centers_.astype(np.float64, copy=False)
+
+    global_scale = np.std(z, axis=0)
+    global_scale = np.where(global_scale < 0.15, 0.15, global_scale)
+    scales = np.zeros_like(centers)
+    for r in range(n_rules_eff):
+        idx = labels == r
+        if np.sum(idx) >= 3:
+            s = np.std(z[idx], axis=0)
+            scales[r] = np.where(s < 0.10, global_scale, s)
+        else:
+            scales[r] = global_scale
+
+    diff = (z[:, None, :] - centers[None, :, :]) / scales[None, :, :]
+    d2 = np.sum(diff * diff, axis=2)
+    w = np.exp(-0.5 * d2)
+    phi = w / (np.sum(w, axis=1, keepdims=True) + 1e-12)
+
+    y_onehot = np.eye(n_classes, dtype=np.float64)[y]
+    a = phi.T @ phi + ridge * np.eye(phi.shape[1], dtype=np.float64)
+    b = phi.T @ y_onehot
+    consequents = np.linalg.solve(a, b)
+
+    return AnfisStatsClassifier(
+        feat_mean=feat_mean.astype(np.float64, copy=False),
+        feat_std=feat_std.astype(np.float64, copy=False),
+        centers=centers,
+        scales=scales.astype(np.float64, copy=False),
+        consequents=consequents.astype(np.float64, copy=False),
+        n_classes=n_classes,
+    )
 
 
 def train_minirocket_if_available(x_train: np.ndarray, y_train: np.ndarray):

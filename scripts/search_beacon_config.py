@@ -14,7 +14,13 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from beaconxai.datasets import apply_standardizer, fit_channel_standardizer, load_npz_dataset, load_uci_har
 from beaconxai.experiments import evaluate_error_risk
-from beaconxai.models import train_1dcnn, train_extratrees_stats, train_logreg, train_minirocket_if_available
+from beaconxai.models import (
+    train_1dcnn,
+    train_anfis_stats,
+    train_extratrees_stats,
+    train_logreg,
+    train_minirocket_if_available,
+)
 from beaconxai.neutralization import Neutralizer
 from beaconxai.types import BeaconConfig
 
@@ -28,7 +34,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dataset", choices=["uci_har", "npz"], default="npz")
     p.add_argument("--dataset-root", default="./data")
     p.add_argument("--npz-path", default="./data/uci_har_shifted.npz")
-    p.add_argument("--model", choices=["extratrees", "minirocket", "cnn1d", "logreg"], default="extratrees")
+    p.add_argument("--model", choices=["anfis", "extratrees", "minirocket", "cnn1d", "logreg"], default="extratrees")
     p.add_argument("--max-eval", type=int, default=512)
     p.add_argument("--seed", type=int, default=42)
 
@@ -79,7 +85,9 @@ def main() -> None:
         x_eval = x_test
         y_eval = y_test
 
-    if args.model == "extratrees":
+    if args.model == "anfis":
+        clf = train_anfis_stats(x_train, y_train)
+    elif args.model == "extratrees":
         clf = train_extratrees_stats(x_train, y_train)
     elif args.model == "logreg":
         clf = train_logreg(x_train, y_train)

@@ -13,7 +13,13 @@ import numpy as np
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from beaconxai.datasets import apply_standardizer, fit_channel_standardizer, load_npz_dataset, load_uci_har
-from beaconxai.models import train_1dcnn, train_extratrees_stats, train_logreg, train_minirocket_if_available
+from beaconxai.models import (
+    train_1dcnn,
+    train_anfis_stats,
+    train_extratrees_stats,
+    train_logreg,
+    train_minirocket_if_available,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -21,7 +27,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dataset", choices=["uci_har", "npz"], default="npz")
     p.add_argument("--dataset-root", default="./data")
     p.add_argument("--npz-path", default="./data/wisdm_phone_accel_gyro_w200s100.npz")
-    p.add_argument("--models", default="extratrees,minirocket,cnn1d")
+    p.add_argument("--models", default="anfis,extratrees,cnn1d")
+    p.add_argument("--anfis-rules", type=int, default=12)
+    p.add_argument("--anfis-max-samples", type=int, default=6000)
     p.add_argument("--train-size", type=int, default=8000)
     p.add_argument("--test-size", type=int, default=4000)
     p.add_argument("--seed", type=int, default=42)
@@ -90,6 +98,13 @@ def main() -> None:
         t0 = time.time()
         if model_name == "logreg":
             clf = train_logreg(x_train, y_train)
+        elif model_name == "anfis":
+            clf = train_anfis_stats(
+                x_train,
+                y_train,
+                n_rules=args.anfis_rules,
+                max_fit_samples=args.anfis_max_samples,
+            )
         elif model_name == "extratrees":
             clf = train_extratrees_stats(x_train, y_train)
         elif model_name == "minirocket":

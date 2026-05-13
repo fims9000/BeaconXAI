@@ -11,7 +11,13 @@ import numpy as np
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from beaconxai.datasets import apply_standardizer, fit_channel_standardizer, load_npz_dataset, load_uci_har
-from beaconxai.models import train_1dcnn, train_extratrees_stats, train_logreg, train_minirocket_if_available
+from beaconxai.models import (
+    train_1dcnn,
+    train_anfis_stats,
+    train_extratrees_stats,
+    train_logreg,
+    train_minirocket_if_available,
+)
 from beaconxai.neutralization import Neutralizer
 from beaconxai.rho_sanity import run_rho_sanity
 from beaconxai.types import BeaconConfig
@@ -22,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dataset", choices=["uci_har", "npz"], default="uci_har")
     p.add_argument("--dataset-root", default="./data")
     p.add_argument("--npz-path", default="")
-    p.add_argument("--model", choices=["extratrees", "minirocket", "cnn1d", "logreg"], default="extratrees")
+    p.add_argument("--model", choices=["anfis", "extratrees", "minirocket", "cnn1d", "logreg"], default="extratrees")
     p.add_argument("--neutralization", choices=["zero", "mean", "interp"], default="zero")
     p.add_argument("--k0", type=int, default=8)
     p.add_argument("--q-max", type=int, default=32)
@@ -55,7 +61,9 @@ def main() -> None:
     x_train = apply_standardizer(x_train, mu, sigma)
     x_test = apply_standardizer(x_test, mu, sigma)
 
-    if args.model == "extratrees":
+    if args.model == "anfis":
+        clf = train_anfis_stats(x_train, y_train)
+    elif args.model == "extratrees":
         clf = train_extratrees_stats(x_train, y_train)
     elif args.model == "logreg":
         clf = train_logreg(x_train, y_train)
