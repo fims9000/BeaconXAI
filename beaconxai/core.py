@@ -62,12 +62,21 @@ class BeaconAudit:
         leaf_stats = self._leaf_stats(state)
         s_plus = sorted((ls for ls in leaf_stats if ls.delta > 0), key=lambda z: z.delta, reverse=True)[: self.cfg.k_pos]
         s_minus = sorted((ls for ls in leaf_stats if ls.delta < 0), key=lambda z: abs(z.delta), reverse=True)[: self.cfg.k_neg]
+        support_mass = float(sum(max(ls.delta, 0.0) for ls in leaf_stats))
+        counter_mass = float(sum(max(-ls.delta, 0.0) for ls in leaf_stats))
+        pos_count = int(sum(ls.delta > 0 for ls in leaf_stats))
+        neg_count = int(sum(ls.delta < 0 for ls in leaf_stats))
+        counter_ratio = float(counter_mass / (support_mass + self.cfg.eps))
 
         positive_all = sorted((ls for ls in leaf_stats if ls.delta > 0), key=lambda z: z.delta, reverse=True)
-        rho_b, rho_b_cost, censored, q_frag_used = self._fragility(x, y_hat, positive_all, q_frag)
+        rho_b, rho_b_cost, censored, q_frag_used, m_last, k_checked, support_mass_removed = self._fragility(
+            x, y_hat, m0, positive_all, q_frag
+        )
         q_used += q_frag_used
 
         risk_b = self._risk_from_fragility(rho_b_cost, censored)
+        drop_ratio = float((m0 - m_last) / (abs(m0) + self.cfg.eps))
+        residual_ratio = float(m_last / (abs(m0) + self.cfg.eps))
 
         suff_margin, suff_keep = self._sufficiency(x, y_hat, state.leaves.values(), s_plus)
         necessity = self._necessity(x, y_hat, m0, s_plus)
@@ -82,6 +91,16 @@ class BeaconAudit:
             rho_b_cost=rho_b_cost,
             risk_b=risk_b,
             censored=censored,
+            m_last=m_last,
+            drop_ratio=drop_ratio,
+            residual_ratio=residual_ratio,
+            k_checked=k_checked,
+            support_mass_removed=support_mass_removed,
+            support_mass=support_mass,
+            counter_mass=counter_mass,
+            counter_ratio=counter_ratio,
+            pos_count=pos_count,
+            neg_count=neg_count,
             sufficiency_margin=suff_margin,
             sufficiency_kept_class=suff_keep,
             necessity=necessity,
@@ -104,7 +123,9 @@ class BeaconAudit:
     def _refine(self, x: np.ndarray, y_hat: int, m0: float, state: _State, q_ref: int) -> int:
         q_ref_used = 0
         queue: set[str] = {
-            cid for cid, c in state.leaves.items() if c.n_points >= self.cfg.l_min and self._split(c)
+            cid
+            for cid, c in state.leaves.items()
+            if c.n_points >= self.cfg.l_min and self._split(c) and self._queue_accepts_delta(state.deltas[cid])
         }
 
         while queue and q_ref_used < q_ref:
@@ -139,7 +160,7 @@ class BeaconAudit:
                 state.leaves[child.cid] = child
                 state.deltas[child.cid] = delta
                 state.history[child.cid] = delta
-                if child.n_points >= self.cfg.l_min and self._split(child):
+                if child.n_points >= self.cfg.l_min and self._split(child) and self._queue_accepts_delta(delta):
                     queue.add(child.cid)
 
             q_ref_used += needed
@@ -150,16 +171,19 @@ class BeaconAudit:
         self,
         x: np.ndarray,
         y_hat: int,
+        m0: float,
         s_plus: Sequence[LeafStats],
         q_frag: int,
-    ) -> tuple[int, float, bool, int]:
+    ) -> tuple[int, float, bool, int, float, int, float]:
         if not s_plus:
-            return 1, 1.0, True, 0
+            return 1, 1.0, True, 0, float(m0), 0, 0.0
 
         total_points = x.shape[0] * x.shape[1]
         selected: list[Component] = []
         q_frag_used = 0
         checked_cost = 0.0
+        margin_last = float(m0)
+        support_mass_removed = 0.0
 
         for idx, stat in enumerate(s_plus, start=1):
             if q_frag_used >= q_frag:
@@ -170,11 +194,21 @@ class BeaconAudit:
             margin = self._margin(z, y_hat)
             q_frag_used += 1
             checked_cost = components_cost(selected, total_points)
+            margin_last = float(margin)
+            support_mass_removed += float(max(stat.delta, 0.0))
 
             if margin <= 0.0:
-                return idx, checked_cost, False, q_frag_used
+                return idx, checked_cost, False, q_frag_used, margin_last, q_frag_used, support_mass_removed
 
-        return q_frag_used + 1, checked_cost if checked_cost > 0 else 1.0, True, q_frag_used
+        return (
+            q_frag_used + 1,
+            checked_cost if checked_cost > 0 else 1.0,
+            True,
+            q_frag_used,
+            margin_last,
+            q_frag_used,
+            support_mass_removed,
+        )
 
     def _sufficiency(
         self,
@@ -212,12 +246,25 @@ class BeaconAudit:
 
     def _priority(self, delta: float, max_abs: float, m0_low: float) -> float:
         s = abs(delta) / max_abs
+        mode = str(getattr(self.cfg, "refinement_mode", "mixed"))
+        if mode == "support":
+            return s + self.cfg.beta * float(delta > 0 and 0 < s < self.cfg.tau_s)
+        if mode == "counter":
+            return s + self.cfg.alpha * float(delta < 0)
         return (
             s
             + self.cfg.alpha * float(delta < 0)
             + self.cfg.beta * float(delta > 0 and 0 < s < self.cfg.tau_s)
-            + self.cfg.gamma * m0_low
+            + self.cfg.gamma * m0_low * float(delta > 0)
         )
+
+    def _queue_accepts_delta(self, delta: float) -> bool:
+        mode = str(getattr(self.cfg, "refinement_mode", "mixed"))
+        if mode == "support":
+            return bool(delta > 0)
+        if mode == "counter":
+            return bool(delta < 0)
+        return True
 
     def _make_partition(self, t_steps: int, channels: int, k0: int) -> list[Component]:
         if self.cfg.partition_mode == "time_only":

@@ -45,6 +45,7 @@ class BeaconConfig:
     tau_m: float = 0.0
     eps: float = 1e-8
     refinement_policy: str = "priority"
+    refinement_mode: str = "mixed"
     partition_mode: str = "time_only"
     risk_policy: str = "rho_only"
 
@@ -68,6 +69,16 @@ class AuditResult:
     rho_b_cost: float
     risk_b: float
     censored: bool
+    m_last: float
+    drop_ratio: float
+    residual_ratio: float
+    k_checked: int
+    support_mass_removed: float
+    support_mass: float
+    counter_mass: float
+    counter_ratio: float
+    pos_count: int
+    neg_count: int
 
     sufficiency_margin: float
     sufficiency_kept_class: bool
@@ -119,3 +130,14 @@ class LocalMetricRow:
     rho_b: int
     rho_b_cost: float
     censored: int
+    m0: float = 0.0
+    m_last: float = 0.0
+    drop_ratio: float = 0.0
+    residual_ratio: float = 1.0
+    k_checked: int = 0
+    support_mass_removed: float = 0.0
+    support_mass: float = 0.0
+    counter_mass: float = 0.0
+    counter_ratio: float = 0.0
+    pos_count: int = 0
+    neg_count: int = 0
