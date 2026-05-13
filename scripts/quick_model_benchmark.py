@@ -17,6 +17,7 @@ from beaconxai.models import (
     train_1dcnn,
     train_anfis_stats,
     train_extratrees_stats,
+    train_histgbt_stats,
     train_logreg,
     train_minirocket_if_available,
 )
@@ -27,9 +28,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dataset", choices=["uci_har", "npz"], default="npz")
     p.add_argument("--dataset-root", default="./data")
     p.add_argument("--npz-path", default="./data/wisdm_phone_accel_gyro_w200s100.npz")
-    p.add_argument("--models", default="anfis,extratrees,cnn1d")
+    p.add_argument("--models", default="anfis,histgbt,extratrees")
     p.add_argument("--anfis-rules", type=int, default=10)
     p.add_argument("--anfis-max-samples", type=int, default=4000)
+    p.add_argument("--histgbt-iters", type=int, default=220)
+    p.add_argument("--histgbt-lr", type=float, default=0.08)
+    p.add_argument("--histgbt-leaves", type=int, default=63)
+    p.add_argument("--histgbt-min-leaf", type=int, default=20)
     p.add_argument("--train-size", type=int, default=8000)
     p.add_argument("--test-size", type=int, default=4000)
     p.add_argument("--seed", type=int, default=42)
@@ -107,6 +112,15 @@ def main() -> None:
             )
         elif model_name == "extratrees":
             clf = train_extratrees_stats(x_train, y_train)
+        elif model_name == "histgbt":
+            clf = train_histgbt_stats(
+                x_train,
+                y_train,
+                max_iter=args.histgbt_iters,
+                learning_rate=args.histgbt_lr,
+                max_leaf_nodes=args.histgbt_leaves,
+                min_samples_leaf=args.histgbt_min_leaf,
+            )
         elif model_name == "minirocket":
             clf = train_minirocket_if_available(x_train, y_train)
         elif model_name == "cnn1d":

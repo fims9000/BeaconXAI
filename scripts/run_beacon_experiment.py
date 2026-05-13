@@ -21,6 +21,7 @@ from beaconxai.models import (
     train_1dcnn,
     train_anfis_stats,
     train_extratrees_stats,
+    train_histgbt_stats,
     train_logreg,
     train_minirocket_if_available,
 )
@@ -43,10 +44,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dataset", choices=["uci_har", "npz"], default="uci_har")
     p.add_argument("--dataset-root", default="./data")
     p.add_argument("--npz-path", default="")
-    p.add_argument("--model", choices=["anfis", "extratrees", "minirocket", "cnn1d", "logreg"], default="extratrees")
+    p.add_argument(
+        "--model",
+        choices=["anfis", "histgbt", "extratrees", "minirocket", "cnn1d", "logreg"],
+        default="histgbt",
+    )
     p.add_argument("--anfis-rules", type=int, default=10)
     p.add_argument("--anfis-ridge", type=float, default=0.2)
     p.add_argument("--anfis-max-samples", type=int, default=4000)
+    p.add_argument("--histgbt-iters", type=int, default=220)
+    p.add_argument("--histgbt-lr", type=float, default=0.08)
+    p.add_argument("--histgbt-leaves", type=int, default=63)
+    p.add_argument("--histgbt-min-leaf", type=int, default=20)
     p.add_argument("--cnn-epochs", type=int, default=20)
     p.add_argument("--cnn-batch-size", type=int, default=128)
     p.add_argument("--cnn-lr", type=float, default=1e-3)
@@ -105,6 +114,15 @@ def main() -> None:
             n_rules=args.anfis_rules,
             ridge=args.anfis_ridge,
             max_fit_samples=args.anfis_max_samples,
+        )
+    elif args.model == "histgbt":
+        clf = train_histgbt_stats(
+            x_train,
+            y_train,
+            max_iter=args.histgbt_iters,
+            learning_rate=args.histgbt_lr,
+            max_leaf_nodes=args.histgbt_leaves,
+            min_samples_leaf=args.histgbt_min_leaf,
         )
     elif args.model == "extratrees":
         clf = train_extratrees_stats(x_train, y_train)

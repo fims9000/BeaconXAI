@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.cluster import KMeans
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
@@ -140,6 +141,28 @@ class TreeStatsClassifier:
         f = _ts_stat_features(x).reshape(1, -1)
         probs = self.model.predict_proba(f)[0]
         return np.log(np.clip(probs, 1e-12, 1.0))
+
+    def predict(self, x: np.ndarray) -> int:
+        return int(np.argmax(self.logits(x)))
+
+
+@dataclass
+class BoostingStatsClassifier:
+    model: object
+    n_classes: int
+
+    def logits(self, x: np.ndarray) -> np.ndarray:
+        f = _anfis_features(x).reshape(1, -1)
+        if hasattr(self.model, "predict_proba"):
+            probs = self.model.predict_proba(f)[0]
+            return np.log(np.clip(probs, 1e-12, 1.0))
+        if hasattr(self.model, "decision_function"):
+            out = self.model.decision_function(f)
+            if np.ndim(out) == 1:
+                score = float(out[0])
+                return np.array([-score, score], dtype=np.float64)
+            return np.asarray(out[0], dtype=np.float64)
+        raise RuntimeError("Boosting model has neither predict_proba nor decision_function")
 
     def predict(self, x: np.ndarray) -> int:
         return int(np.argmax(self.logits(x)))
@@ -301,6 +324,39 @@ def train_extratrees_stats(
     clf.fit(x_feat, y_train)
     n_classes = int(np.max(y_train)) + 1
     return TreeStatsClassifier(model=clf, n_classes=n_classes)
+
+
+def train_histgbt_stats(
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    max_iter: int = 220,
+    learning_rate: float = 0.08,
+    max_leaf_nodes: int = 63,
+    min_samples_leaf: int = 20,
+    random_state: int = 42,
+) -> BoostingStatsClassifier:
+    x_feat = _anfis_features(x_train).astype(np.float32, copy=False)
+    y = y_train.astype(np.int64, copy=False)
+    n_classes = int(np.max(y)) + 1
+
+    counts = np.bincount(y, minlength=n_classes).astype(np.float64)
+    counts = np.where(counts < 1.0, 1.0, counts)
+    cls_w = float(len(y)) / (float(n_classes) * counts)
+    sample_weight = cls_w[y]
+
+    clf = HistGradientBoostingClassifier(
+        loss="log_loss",
+        max_iter=max_iter,
+        learning_rate=learning_rate,
+        max_leaf_nodes=max_leaf_nodes,
+        min_samples_leaf=min_samples_leaf,
+        early_stopping=True,
+        validation_fraction=0.1,
+        n_iter_no_change=20,
+        random_state=random_state,
+    )
+    clf.fit(x_feat, y, sample_weight=sample_weight)
+    return BoostingStatsClassifier(model=clf, n_classes=n_classes)
 
 
 def train_anfis_stats(
