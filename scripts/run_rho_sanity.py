@@ -29,6 +29,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dataset-root", default="./data")
     p.add_argument("--npz-path", default="")
     p.add_argument("--model", choices=["anfis", "extratrees", "minirocket", "cnn1d", "logreg"], default="extratrees")
+    p.add_argument("--anfis-rules", type=int, default=10)
+    p.add_argument("--anfis-ridge", type=float, default=0.2)
+    p.add_argument("--anfis-max-samples", type=int, default=4000)
     p.add_argument("--neutralization", choices=["zero", "mean", "interp"], default="zero")
     p.add_argument("--k0", type=int, default=8)
     p.add_argument("--q-max", type=int, default=32)
@@ -62,7 +65,13 @@ def main() -> None:
     x_test = apply_standardizer(x_test, mu, sigma)
 
     if args.model == "anfis":
-        clf = train_anfis_stats(x_train, y_train)
+        clf = train_anfis_stats(
+            x_train,
+            y_train,
+            n_rules=args.anfis_rules,
+            ridge=args.anfis_ridge,
+            max_fit_samples=args.anfis_max_samples,
+        )
     elif args.model == "extratrees":
         clf = train_extratrees_stats(x_train, y_train)
     elif args.model == "logreg":

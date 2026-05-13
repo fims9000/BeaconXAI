@@ -81,6 +81,56 @@ def _ts_stat_features(x: np.ndarray) -> np.ndarray:
     return out[0] if squeeze else out
 
 
+def _anfis_features(x: np.ndarray) -> np.ndarray:
+    """
+    Rich but fast HAR feature set for ANFIS.
+    Returns [N, F] or [F] for single sample.
+    """
+    if x.ndim == 2:
+        x = x[None, ...]
+        squeeze = True
+    else:
+        squeeze = False
+
+    n, t, c = x.shape
+    base = _ts_stat_features(x)
+    mean_abs = np.mean(np.abs(x), axis=1)
+    rms = np.sqrt(np.mean(x * x, axis=1))
+    q25 = np.quantile(x, 0.25, axis=1)
+    q75 = np.quantile(x, 0.75, axis=1)
+    iqr = q75 - q25
+
+    # Signal magnitude area-like summary
+    sma = np.sum(np.abs(x), axis=1) / float(t)
+
+    # Pairwise channel correlations per window
+    xc = x - x.mean(axis=1, keepdims=True)
+    std = x.std(axis=1) + 1e-8
+    corrs = []
+    for i in range(c):
+        for j in range(i + 1, c):
+            num = np.mean(xc[:, :, i] * xc[:, :, j], axis=1)
+            den = std[:, i] * std[:, j]
+            corrs.append((num / den)[:, None])
+    corr_feat = np.concatenate(corrs, axis=1) if corrs else np.zeros((n, 0), dtype=x.dtype)
+
+    # Frequency-domain energy + entropy + dominant bin
+    fx = np.fft.rfft(x, axis=1)
+    pwr = (fx.real * fx.real + fx.imag * fx.imag).astype(np.float64, copy=False)
+    pwr_nd = pwr[:, 1:, :] if pwr.shape[1] > 1 else pwr
+    spec_energy = np.mean(pwr_nd, axis=1)
+    ps = pwr_nd + 1e-12
+    ps = ps / np.sum(ps, axis=1, keepdims=True)
+    spec_entropy = -np.sum(ps * np.log(ps), axis=1) / np.log(ps.shape[1] + 1e-12)
+    dom_bin = np.argmax(pwr_nd, axis=1).astype(np.float64) / float(max(1, pwr_nd.shape[1] - 1))
+
+    out = np.concatenate(
+        [base, mean_abs, rms, iqr, sma, corr_feat, spec_energy, spec_entropy, dom_bin],
+        axis=1,
+    )
+    return out[0] if squeeze else out
+
+
 @dataclass
 class TreeStatsClassifier:
     model: ExtraTreesClassifier
@@ -101,20 +151,27 @@ class AnfisStatsClassifier:
     feat_std: np.ndarray
     centers: np.ndarray
     scales: np.ndarray
-    consequents: np.ndarray
+    consequent_linear: np.ndarray
+    consequent_bias: np.ndarray
     n_classes: int
 
     def _phi(self, x: np.ndarray) -> np.ndarray:
-        f = _ts_stat_features(x).astype(np.float64, copy=False).reshape(1, -1)
+        f = _anfis_features(x).astype(np.float64, copy=False).reshape(1, -1)
         z = (f - self.feat_mean[None, :]) / self.feat_std[None, :]
         diff = (z[:, None, :] - self.centers[None, :, :]) / self.scales[None, :, :]
         d2 = np.sum(diff * diff, axis=2)
         w = np.exp(-0.5 * d2)
-        return w / (np.sum(w, axis=1, keepdims=True) + 1e-12)
+        phi = w / (np.sum(w, axis=1, keepdims=True) + 1e-12)
+        return phi
 
     def logits(self, x: np.ndarray) -> np.ndarray:
+        f = _anfis_features(x).astype(np.float64, copy=False).reshape(1, -1)
+        z = (f - self.feat_mean[None, :]) / self.feat_std[None, :]
         phi = self._phi(x)
-        out = phi @ self.consequents
+        # First-order Sugeno consequents:
+        # f_r,c(z) = a_{r,c}^T z + b_{r,c}, y_c = sum_r phi_r * f_r,c
+        rule_logits = np.einsum("nf,rfc->nrc", z, self.consequent_linear) + self.consequent_bias[None, :, :]
+        out = np.sum(phi[:, :, None] * rule_logits, axis=1)
         return out[0].astype(np.float64, copy=False)
 
     def predict(self, x: np.ndarray) -> int:
@@ -249,12 +306,12 @@ def train_extratrees_stats(
 def train_anfis_stats(
     x_train: np.ndarray,
     y_train: np.ndarray,
-    n_rules: int = 12,
-    ridge: float = 1e-2,
-    max_fit_samples: int = 6000,
+    n_rules: int = 10,
+    ridge: float = 2e-1,
+    max_fit_samples: int = 4000,
     random_state: int = 42,
 ) -> AnfisStatsClassifier:
-    x_feat = _ts_stat_features(x_train).astype(np.float64, copy=False)
+    x_feat = _anfis_features(x_train).astype(np.float64, copy=False)
     y = y_train.astype(np.int64, copy=False)
     if max_fit_samples > 0 and len(x_feat) > max_fit_samples:
         rng = np.random.default_rng(random_state)
@@ -269,7 +326,7 @@ def train_anfis_stats(
     z = (x_feat - feat_mean[None, :]) / feat_std[None, :]
 
     n_rules_eff = int(max(2, min(n_rules, len(z))))
-    km = KMeans(n_clusters=n_rules_eff, random_state=random_state, n_init="auto")
+    km = KMeans(n_clusters=n_rules_eff, random_state=random_state, n_init=5)
     labels = km.fit_predict(z)
     centers = km.cluster_centers_.astype(np.float64, copy=False)
 
@@ -289,17 +346,32 @@ def train_anfis_stats(
     w = np.exp(-0.5 * d2)
     phi = w / (np.sum(w, axis=1, keepdims=True) + 1e-12)
 
+    # Weighted least squares on first-order Sugeno design matrix.
+    # X = [phi_r * z, phi_r]_{r=1..R}
+    n_samples, n_feat = z.shape
+    lin = (phi[:, :, None] * z[:, None, :]).reshape(n_samples, n_rules_eff * n_feat)
+    design = np.concatenate([lin, phi], axis=1)
+
     y_onehot = np.eye(n_classes, dtype=np.float64)[y]
-    a = phi.T @ phi + ridge * np.eye(phi.shape[1], dtype=np.float64)
-    b = phi.T @ y_onehot
-    consequents = np.linalg.solve(a, b)
+    counts = np.bincount(y, minlength=n_classes).astype(np.float64)
+    counts = np.where(counts < 1.0, 1.0, counts)
+    cls_w = float(len(y)) / (float(n_classes) * counts)
+    sw = cls_w[y]
+
+    xw = design * sw[:, None]
+    a = design.T @ xw + ridge * np.eye(design.shape[1], dtype=np.float64)
+    b = design.T @ (y_onehot * sw[:, None])
+    theta = np.linalg.solve(a, b)
+    consequent_linear = theta[: n_rules_eff * n_feat, :].reshape(n_rules_eff, n_feat, n_classes)
+    consequent_bias = theta[n_rules_eff * n_feat :, :].reshape(n_rules_eff, n_classes)
 
     return AnfisStatsClassifier(
         feat_mean=feat_mean.astype(np.float64, copy=False),
         feat_std=feat_std.astype(np.float64, copy=False),
         centers=centers,
         scales=scales.astype(np.float64, copy=False),
-        consequents=consequents.astype(np.float64, copy=False),
+        consequent_linear=consequent_linear.astype(np.float64, copy=False),
+        consequent_bias=consequent_bias.astype(np.float64, copy=False),
         n_classes=n_classes,
     )
 
