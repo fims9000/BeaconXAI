@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.model_selection import train_test_split
 
 
 def parse_args() -> argparse.Namespace:
@@ -16,7 +17,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--stride", type=int, default=64)
     p.add_argument("--min-purity", type=float, default=0.85)
     p.add_argument("--train-user-frac", type=float, default=0.7)
-    p.add_argument("--split-mode", choices=["sorted", "random"], default="random")
+    p.add_argument("--split-mode", choices=["sorted", "random", "window_random"], default="random")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--merge-tol-ns", type=int, default=40_000_000)
     return p.parse_args()
@@ -141,6 +142,7 @@ def main() -> None:
 
     x_train, y_train = [], []
     x_test, y_test = [], []
+    x_all, y_all = [], []
 
     for k, uid in enumerate(users, start=1):
         acc = _read_sensor_file(acc_dir / f"data_{uid}_accel_phone.txt")
@@ -168,20 +170,37 @@ def main() -> None:
         if not xs:
             continue
 
-        if uid in train_users:
-            x_train.extend(xs)
-            y_train.extend(ys)
+        if args.split_mode == "window_random":
+            x_all.extend(xs)
+            y_all.extend(ys)
         else:
-            x_test.extend(xs)
-            y_test.extend(ys)
+            if uid in train_users:
+                x_train.extend(xs)
+                y_train.extend(ys)
+            else:
+                x_test.extend(xs)
+                y_test.extend(ys)
 
         if k % 10 == 0:
             print(f"processed users: {k}/{len(users)}")
 
-    x_train_arr = np.stack(x_train).astype(np.float32) if x_train else np.empty((0, args.window, 6), dtype=np.float32)
-    y_train_arr = np.asarray(y_train, dtype=np.int64)
-    x_test_arr = np.stack(x_test).astype(np.float32) if x_test else np.empty((0, args.window, 6), dtype=np.float32)
-    y_test_arr = np.asarray(y_test, dtype=np.int64)
+    if args.split_mode == "window_random":
+        if not x_all:
+            raise RuntimeError("No windows extracted; cannot split in window_random mode")
+        x_all_arr = np.stack(x_all).astype(np.float32)
+        y_all_arr = np.asarray(y_all, dtype=np.int64)
+        x_train_arr, x_test_arr, y_train_arr, y_test_arr = train_test_split(
+            x_all_arr,
+            y_all_arr,
+            test_size=max(0.01, 1.0 - float(args.train_user_frac)),
+            random_state=args.seed,
+            stratify=y_all_arr,
+        )
+    else:
+        x_train_arr = np.stack(x_train).astype(np.float32) if x_train else np.empty((0, args.window, 6), dtype=np.float32)
+        y_train_arr = np.asarray(y_train, dtype=np.int64)
+        x_test_arr = np.stack(x_test).astype(np.float32) if x_test else np.empty((0, args.window, 6), dtype=np.float32)
+        y_test_arr = np.asarray(y_test, dtype=np.int64)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
