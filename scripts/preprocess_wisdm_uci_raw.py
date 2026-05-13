@@ -14,6 +14,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out", default="./data/wisdm_phone_accel_gyro.npz")
     p.add_argument("--window", type=int, default=128)
     p.add_argument("--stride", type=int, default=64)
+    p.add_argument("--min-purity", type=float, default=0.85)
     p.add_argument("--train-user-frac", type=float, default=0.7)
     p.add_argument("--merge-tol-ns", type=int, default=40_000_000)
     return p.parse_args()
@@ -54,7 +55,7 @@ def _segment_ids(act: np.ndarray, ts: np.ndarray) -> np.ndarray:
     return seg
 
 
-def _windowize(df: pd.DataFrame, win: int, stride: int, act_to_id: dict[str, int]):
+def _windowize(df: pd.DataFrame, win: int, stride: int, act_to_id: dict[str, int], min_purity: float):
     xs = []
     ys = []
     if df.empty:
@@ -73,7 +74,11 @@ def _windowize(df: pd.DataFrame, win: int, stride: int, act_to_id: dict[str, int
             e = s + win
             lw = labels[s:e]
             vals, cnts = np.unique(lw, return_counts=True)
-            act = vals[np.argmax(cnts)]
+            k = int(np.argmax(cnts))
+            act = vals[k]
+            purity = float(cnts[k]) / float(len(lw))
+            if purity < min_purity:
+                continue
             xs.append(arr[s:e])
             ys.append(act_to_id[str(act)])
     return xs, ys
@@ -116,6 +121,11 @@ def main() -> None:
 
     n_train = max(1, int(len(users) * args.train_user_frac))
     train_users = set(users[:n_train])
+    test_users = set(users[n_train:])
+    overlap = train_users.intersection(test_users)
+    if overlap:
+        raise RuntimeError(f"Subject split leakage detected: {sorted(overlap)}")
+    print(f"subjects total={len(users)} train={len(train_users)} test={len(test_users)}")
 
     x_train, y_train = [], []
     x_test, y_test = [], []
@@ -142,7 +152,7 @@ def main() -> None:
         if merged.empty:
             continue
 
-        xs, ys = _windowize(merged, args.window, args.stride, act_to_id)
+        xs, ys = _windowize(merged, args.window, args.stride, act_to_id, args.min_purity)
         if not xs:
             continue
 
@@ -169,6 +179,8 @@ def main() -> None:
     print(out)
     print("Shapes:", x_train_arr.shape, y_train_arr.shape, x_test_arr.shape, y_test_arr.shape)
     print("Classes:", len(act_to_id), sorted(act_to_id.items()))
+    print("Train users head:", sorted(train_users)[:10])
+    print("Test users head:", sorted(test_users)[:10])
 
 
 if __name__ == "__main__":

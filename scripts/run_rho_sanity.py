@@ -11,7 +11,7 @@ import numpy as np
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from beaconxai.datasets import apply_standardizer, fit_channel_standardizer, load_npz_dataset, load_uci_har
-from beaconxai.models import train_1dcnn, train_logreg, train_minirocket_if_available
+from beaconxai.models import train_1dcnn, train_extratrees_stats, train_logreg, train_minirocket_if_available
 from beaconxai.neutralization import Neutralizer
 from beaconxai.rho_sanity import run_rho_sanity
 from beaconxai.types import BeaconConfig
@@ -22,7 +22,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dataset", choices=["uci_har", "npz"], default="uci_har")
     p.add_argument("--dataset-root", default="./data")
     p.add_argument("--npz-path", default="")
-    p.add_argument("--model", choices=["logreg", "minirocket", "cnn1d"], default="cnn1d")
+    p.add_argument("--model", choices=["extratrees", "minirocket", "cnn1d", "logreg"], default="extratrees")
     p.add_argument("--neutralization", choices=["zero", "mean", "interp"], default="zero")
     p.add_argument("--k0", type=int, default=8)
     p.add_argument("--q-max", type=int, default=32)
@@ -32,6 +32,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cnn-epochs", type=int, default=20)
     p.add_argument("--cnn-batch-size", type=int, default=128)
     p.add_argument("--cnn-lr", type=float, default=1e-3)
+    p.add_argument("--cnn-label-smoothing", type=float, default=0.0)
+    p.add_argument("--cnn-no-class-weights", action="store_true")
+    p.add_argument("--cnn-tta-shifts", default="0")
     p.add_argument("--out", default="./outputs_validation/rho_sanity.json")
     return p.parse_args()
 
@@ -52,15 +55,23 @@ def main() -> None:
     x_train = apply_standardizer(x_train, mu, sigma)
     x_test = apply_standardizer(x_test, mu, sigma)
 
-    if args.model == "logreg":
+    if args.model == "extratrees":
+        clf = train_extratrees_stats(x_train, y_train)
+    elif args.model == "logreg":
         clf = train_logreg(x_train, y_train)
     elif args.model == "cnn1d":
+        tta_shifts = tuple(int(v) for v in args.cnn_tta_shifts.split(",") if v.strip())
+        if not tta_shifts:
+            tta_shifts = (0,)
         clf = train_1dcnn(
             x_train,
             y_train,
             epochs=args.cnn_epochs,
             batch_size=args.cnn_batch_size,
             lr=args.cnn_lr,
+            label_smoothing=args.cnn_label_smoothing,
+            use_class_weights=not args.cnn_no_class_weights,
+            tta_shifts=tta_shifts,
         )
     else:
         clf = train_minirocket_if_available(x_train, y_train)
