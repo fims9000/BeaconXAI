@@ -38,6 +38,14 @@ def _precision_at_10(y: np.ndarray, s: np.ndarray) -> float:
     return float(np.mean(y[idx] == 1))
 
 
+def _mean_by_class(y: np.ndarray, s: np.ndarray) -> tuple[float, float]:
+    e = y == 1
+    c = y == 0
+    me = float(np.mean(s[e])) if np.any(e) else float("nan")
+    mc = float(np.mean(s[c])) if np.any(c) else float("nan")
+    return me, mc
+
+
 def _stratified_split_idx(y: np.ndarray, val_frac: float, seed: int) -> tuple[np.ndarray, np.ndarray]:
     rng = np.random.default_rng(seed)
     tr_idx = []
@@ -284,8 +292,7 @@ def main() -> None:
         args.seed + 61,
     )
 
-    eval_rows = []
-    for name, s in [
+    model_scores = [
         ("margin", score_margin),
         ("margin+counter_mass", score_m),
         ("margin+CE", score_m_ce),
@@ -295,15 +302,36 @@ def main() -> None:
         ("margin+C_perp", score_cp),
         ("margin-C_perp", mt - lam_cp * c_perp_t),
         ("margin+C_rel", score_cr),
-    ]:
+    ]
+
+    eval_rows = []
+    sign_rows = []
+    for name, s in model_scores:
         p10 = _precision_at_10(yt, s)
+        p10_asc = _precision_at_10(yt, -s)
+        auc_s = _auc(yt, s)
+        auc_neg = _auc(yt, -s)
+        me, mc = _mean_by_class(yt, s)
+        sign_rows.append(
+            {
+                "method": name,
+                "auc_score": auc_s,
+                "auc_neg_score": auc_neg,
+                "auc_sum": (auc_s + auc_neg) if np.isfinite(auc_s) and np.isfinite(auc_neg) else float("nan"),
+                "mean_score_error": me,
+                "mean_score_correct": mc,
+                "risk_direction_ok": int(me > mc) if np.isfinite(me) and np.isfinite(mc) else -1,
+                "p10_desc": p10,
+                "p10_asc": p10_asc,
+            }
+        )
         eval_rows.append(
             {
                 "dataset": args.dataset,
                 "model": args.model,
                 "q_max": args.q_max,
                 "method": name,
-                "auroc": _auc(yt, s),
+                "auroc": auc_s,
                 "p10": p10,
                 "delta_p10_vs_margin": p10 - _precision_at_10(yt, score_margin),
             }
@@ -331,7 +359,8 @@ def main() -> None:
     out_diag = Path(f"{args.out_prefix}_{args.dataset}_{args.model}_diag.csv")
     out_eval = Path(f"{args.out_prefix}_{args.dataset}_{args.model}_eval.csv")
     out_bins = Path(f"{args.out_prefix}_{args.dataset}_{args.model}_bins.csv")
-    for path, rows in [(out_diag, diag_rows), (out_eval, eval_rows), (out_bins, bin_rows)]:
+    out_sign = Path(f"{args.out_prefix}_{args.dataset}_{args.model}_sign_audit.csv")
+    for path, rows in [(out_diag, diag_rows), (out_eval, eval_rows), (out_bins, bin_rows), (out_sign, sign_rows)]:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", newline="", encoding="utf-8") as f:
             if rows:
@@ -342,6 +371,7 @@ def main() -> None:
     print(out_diag)
     print(out_eval)
     print(out_bins)
+    print(out_sign)
 
 
 if __name__ == "__main__":
