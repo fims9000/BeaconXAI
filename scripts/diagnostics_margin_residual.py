@@ -7,6 +7,8 @@ from pathlib import Path
 import sys
 
 import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -98,6 +100,21 @@ def _fit_lambda(y: np.ndarray, m: np.ndarray, z: np.ndarray) -> float:
             best_auc = a
             best = float(lam)
     return best
+
+
+def _fit_logreg_score(yv: np.ndarray, Xv: np.ndarray, Xt: np.ndarray, seed: int) -> np.ndarray:
+    sc = StandardScaler()
+    Xv2 = sc.fit_transform(Xv)
+    Xt2 = sc.transform(Xt)
+    clf = LogisticRegression(
+        C=1.0,
+        class_weight="balanced",
+        random_state=seed,
+        solver="lbfgs",
+        max_iter=1000,
+    )
+    clf.fit(Xv2, yv)
+    return clf.predict_proba(Xt2)[:, 1]
 
 
 def parse_args() -> argparse.Namespace:
@@ -247,13 +264,36 @@ def main() -> None:
         {"feature": "rho_cost", "corr_with_neg_margin": _corr(rhot, mt), "auc": _auc(yt, rhot)},
         {"feature": "C_perp", "corr_with_neg_margin": _corr(c_perp_t, mt), "auc": _auc(yt, c_perp_t)},
         {"feature": "C_rel", "corr_with_neg_margin": _corr(c_rel_t, mt), "auc": _auc(yt, c_rel_t)},
+        {"feature": "corr(C_perp,counter_mass)", "corr_with_neg_margin": _corr(c_perp_t, cmt), "auc": float("nan")},
+        {"feature": "corr(C_rel,counter_mass)", "corr_with_neg_margin": _corr(c_rel_t, cmt), "auc": float("nan")},
+        {"feature": "corr(C_perp,error)", "corr_with_neg_margin": _corr(c_perp_t, yt.astype(np.float64)), "auc": float("nan")},
+        {"feature": "AUC(-C_perp)", "corr_with_neg_margin": float("nan"), "auc": _auc(yt, -c_perp_t)},
     ]
+
+    score_m_ce = _fit_logreg_score(yv, np.stack([mv, cev], axis=1), np.stack([mt, cet], axis=1), args.seed + 31)
+    score_m_cm_ce = _fit_logreg_score(
+        yv, np.stack([mv, cmv, cev], axis=1), np.stack([mt, cmt, cet], axis=1), args.seed + 41
+    )
+    score_m_cm_cp = _fit_logreg_score(
+        yv, np.stack([mv, cmv, c_perp_v], axis=1), np.stack([mt, cmt, c_perp_t], axis=1), args.seed + 51
+    )
+    score_m_cm_ce_cp = _fit_logreg_score(
+        yv,
+        np.stack([mv, cmv, cev, c_perp_v], axis=1),
+        np.stack([mt, cmt, cet, c_perp_t], axis=1),
+        args.seed + 61,
+    )
 
     eval_rows = []
     for name, s in [
         ("margin", score_margin),
         ("margin+counter_mass", score_m),
+        ("margin+CE", score_m_ce),
+        ("margin+counter_mass+CE", score_m_cm_ce),
+        ("margin+counter_mass+C_perp", score_m_cm_cp),
+        ("margin+counter_mass+CE+C_perp", score_m_cm_ce_cp),
         ("margin+C_perp", score_cp),
+        ("margin-C_perp", mt - lam_cp * c_perp_t),
         ("margin+C_rel", score_cr),
     ]:
         p10 = _precision_at_10(yt, s)
