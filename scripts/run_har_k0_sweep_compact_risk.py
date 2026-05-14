@@ -179,12 +179,23 @@ def _append_row(
     seed: int,
     mean_q_used: float,
     censored_rate: float,
+    latency_per_query: float,
 ) -> None:
     auroc = _auc(y, score)
     auprc = _auprc(y, score)
     auroc_b = _auc(y, score_base)
     auprc_b = _auprc(y, score_base)
     p10, r10 = _precision_recall_at_frac(y, score, 0.10)
+    delta_p10 = float(p10 - p10_base)
+    delta_r10 = float(r10 - r10_base)
+    mean_q_used = float(max(mean_q_used, 1.0))
+    qntg_p10 = float(delta_p10 / mean_q_used)
+    if latency_per_query > 0:
+        latency_per_object = float(mean_q_used * latency_per_query)
+        lntg_p10 = float(delta_p10 / max(latency_per_object, 1e-12))
+    else:
+        latency_per_object = float("nan")
+        lntg_p10 = float("nan")
     if method == "negative_margin":
         ci_low, ci_high, frac_positive = 0.0, 0.0, 0.0
     else:
@@ -200,13 +211,16 @@ def _append_row(
             "recall_at_10pct": r10,
             "delta_auroc": auroc - auroc_b,
             "delta_auprc": auprc - auprc_b,
-            "delta_p10": p10 - p10_base,
-            "delta_r10": r10 - r10_base,
+            "delta_p10": delta_p10,
+            "delta_r10": delta_r10,
+            "qntg_p10": qntg_p10,
+            "lntg_p10": lntg_p10,
             "ci_low": ci_low,
             "ci_high": ci_high,
             "frac_positive": frac_positive,
             "mean_q_used": mean_q_used,
             "censored_rate": censored_rate,
+            "latency_per_object": latency_per_object,
         }
     )
 
@@ -223,6 +237,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cnn-epochs", type=int, default=8)
     p.add_argument("--cnn-batch-size", type=int, default=256)
     p.add_argument("--n-bootstrap", type=int, default=120)
+    p.add_argument("--latency-per-query", type=float, default=-1.0)
+    p.add_argument("--priority-mode", choices=["base", "switch"], default="base")
+    p.add_argument("--switch-eta", type=float, default=0.0)
+    p.add_argument("--budget-mode", choices=["fixed", "conflict_first"], default="fixed")
+    p.add_argument("--tau-conflict", type=float, default=0.0)
     p.add_argument("--out", default="./outputs_composite/har_k0_sweep_compact_risk_q8_q16.csv")
     return p.parse_args()
 
@@ -290,6 +309,10 @@ def main() -> None:
         tau_s=0.10,
         tau_m=tau_m,
         refinement_mode="mixed",
+        priority_mode=args.priority_mode,
+        switch_eta=args.switch_eta,
+        budget_mode=args.budget_mode,
+        tau_conflict=args.tau_conflict,
         partition_mode="time_only",
         risk_policy="rho_only",
     )
@@ -353,6 +376,7 @@ def main() -> None:
                     args.seed + q + k0,
                     0.0,
                     0.0,
+                    args.latency_per_query,
                 )
                 for m in method_defs:
                     _append_row(
@@ -369,6 +393,7 @@ def main() -> None:
                         args.seed + 100 + q + k0,
                         0.0,
                         0.0,
+                        args.latency_per_query,
                     )
                 print(f"[k0-sweep] k0={k0} q={q} flat-mode", flush=True)
                 continue
@@ -392,8 +417,9 @@ def main() -> None:
                 r10_base,
                 args.n_bootstrap,
                 args.seed + q + k0,
-                float(np.mean(q_used_t)),
-                float(np.mean(cens_t)),
+                1.0,
+                0.0,
+                args.latency_per_query,
             )
             for name, keys in method_defs.items():
                 xv = np.stack([feats_v[k] for k in keys], axis=1)
@@ -413,6 +439,7 @@ def main() -> None:
                     args.seed + 200 + q + k0,
                     float(np.mean(q_used_t)),
                     float(np.mean(cens_t)),
+                    args.latency_per_query,
                 )
             print(f"[k0-sweep] k0={k0} q={q} done", flush=True)
 
@@ -436,8 +463,11 @@ def main() -> None:
                 "ci_low",
                 "ci_high",
                 "frac_positive",
+                "qntg_p10",
+                "lntg_p10",
                 "mean_q_used",
                 "censored_rate",
+                "latency_per_object",
             ],
         )
         wr.writeheader()

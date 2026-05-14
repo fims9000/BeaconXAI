@@ -152,6 +152,8 @@ def _collect_features(
         "rho_cost": _rank_norm(rho_cost),
         "frag_drop": _rank_norm(frag_drop),
         "frag_residual": _rank_norm(frag_residual),
+        "q_used": np.array([br[i].q_used for i in ids], dtype=np.float64),
+        "censored": np.array([br[i].censored for i in ids], dtype=np.float64),
     }
     return data
 
@@ -167,7 +169,6 @@ def _fit_and_score(
     xt = scaler.transform(x_test)
     clf = LogisticRegression(
         C=1.0,
-        penalty="l2",
         class_weight="balanced",
         random_state=seed,
         solver="lbfgs",
@@ -186,6 +187,10 @@ def _append_eval(
     y: np.ndarray,
     score: np.ndarray,
     score_base: np.ndarray,
+    p10_base: float,
+    r10_base: float,
+    mean_q_used: float,
+    latency_per_query: float,
     n_boot: int,
     seed: int,
 ) -> None:
@@ -194,6 +199,16 @@ def _append_eval(
     auroc_b = _auc(y, score_base)
     auprc_b = _auprc(y, score_base)
     p10, r10 = _precision_recall_at_frac(y, score, 0.10)
+    delta_p10 = float(p10 - p10_base)
+    delta_r10 = float(r10 - r10_base)
+    mean_q_used = float(max(mean_q_used, 1.0))
+    qntg_p10 = float(delta_p10 / mean_q_used)
+    if latency_per_query > 0:
+        latency_per_object = float(mean_q_used * latency_per_query)
+        lntg_p10 = float(delta_p10 / max(latency_per_object, 1e-12))
+    else:
+        latency_per_object = float("nan")
+        lntg_p10 = float("nan")
     if method == "negative_margin":
         ci_low, ci_high, frac_positive = 0.0, 0.0, 0.0
     else:
@@ -208,6 +223,12 @@ def _append_eval(
             "auprc": auprc,
             "precision_at_10pct": p10,
             "recall_at_10pct": r10,
+            "delta_p10": delta_p10,
+            "delta_r10": delta_r10,
+            "qntg_p10": qntg_p10,
+            "lntg_p10": lntg_p10,
+            "mean_q_used": mean_q_used,
+            "latency_per_object": latency_per_object,
             "delta_auroc": auroc - auroc_b,
             "delta_auprc": auprc - auprc_b,
             "ci_low": ci_low,
@@ -230,6 +251,11 @@ def _run_dataset(
     har_root: str,
     cnn_epochs: int,
     cnn_batch_size: int,
+    latency_per_query: float,
+    priority_mode: str,
+    switch_eta: float,
+    budget_mode: str,
+    tau_conflict: float,
 ) -> list[dict]:
     print(f"[rescore] dataset={dataset} model={model} q={q_values}", flush=True)
     if dataset == "har":
@@ -306,6 +332,10 @@ def _run_dataset(
         tau_s=0.10,
         tau_m=tau_m,
         refinement_mode="mixed",
+        priority_mode=priority_mode,
+        switch_eta=switch_eta,
+        budget_mode=budget_mode,
+        tau_conflict=tau_conflict,
         partition_mode="time_only",
         risk_policy="rho_only",
     )
@@ -365,7 +395,24 @@ def _run_dataset(
         yt = ft["y"]
         base_v = fv["neg_margin"]
         base_t = ft["neg_margin"]
-        _append_eval(out_rows, dataset, model, q, "negative_margin", yt, base_t, base_t, n_bootstrap, seed + q)
+        p10_base, r10_base = _precision_recall_at_frac(yt, base_t, 0.10)
+        _append_eval(
+            out_rows,
+            dataset,
+            model,
+            q,
+            "negative_margin",
+            yt,
+            base_t,
+            base_t,
+            p10_base,
+            r10_base,
+            1.0,
+            latency_per_query,
+            n_bootstrap,
+            seed + q,
+        )
+        mean_q_used = float(np.mean(ft["q_used"]))
         for name, keys in methods.items():
             xv = np.stack([fv[k] for k in keys], axis=1)
             xt = np.stack([ft[k] for k in keys], axis=1)
@@ -379,6 +426,10 @@ def _run_dataset(
                 yt,
                 score_t,
                 base_t,
+                p10_base,
+                r10_base,
+                mean_q_used,
+                latency_per_query,
                 n_bootstrap,
                 seed + 200 + q,
             )
@@ -400,6 +451,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--har-root", default="./data")
     p.add_argument("--cnn-epochs", type=int, default=25)
     p.add_argument("--cnn-batch-size", type=int, default=256)
+    p.add_argument("--latency-per-query", type=float, default=-1.0)
+    p.add_argument("--priority-mode", choices=["base", "switch"], default="base")
+    p.add_argument("--switch-eta", type=float, default=0.0)
+    p.add_argument("--budget-mode", choices=["fixed", "conflict_first"], default="fixed")
+    p.add_argument("--tau-conflict", type=float, default=0.0)
     p.add_argument("--out", required=True)
     return p.parse_args()
 
@@ -420,6 +476,11 @@ def main() -> None:
         har_root=args.har_root,
         cnn_epochs=args.cnn_epochs,
         cnn_batch_size=args.cnn_batch_size,
+        latency_per_query=args.latency_per_query,
+        priority_mode=args.priority_mode,
+        switch_eta=args.switch_eta,
+        budget_mode=args.budget_mode,
+        tau_conflict=args.tau_conflict,
     )
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -435,6 +496,12 @@ def main() -> None:
                 "auprc",
                 "precision_at_10pct",
                 "recall_at_10pct",
+                "delta_p10",
+                "delta_r10",
+                "qntg_p10",
+                "lntg_p10",
+                "mean_q_used",
+                "latency_per_object",
                 "delta_auroc",
                 "delta_auprc",
                 "ci_low",

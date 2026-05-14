@@ -46,6 +46,10 @@ class BeaconConfig:
     eps: float = 1e-8
     refinement_policy: str = "priority"
     refinement_mode: str = "mixed"
+    priority_mode: str = "base"
+    switch_eta: float = 0.0
+    budget_mode: str = "fixed"
+    tau_conflict: float = 0.0
     partition_mode: str = "time_only"
     risk_policy: str = "rho_only"
 

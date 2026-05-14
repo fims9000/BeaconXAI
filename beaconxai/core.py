@@ -21,6 +21,7 @@ from .types import AuditResult, BeaconConfig, Component, LeafStats, LogitFn
 class _State:
     leaves: dict[str, Component]
     deltas: dict[str, float]
+    switches: dict[str, int]
     history: dict[str, float]
 
 
@@ -44,17 +45,18 @@ class BeaconAudit:
             raise ValueError(f"invalid config: q_max={self.cfg.q_max} < K0={q_init}")
 
         q_remaining = self.cfg.q_max - q_init
-        q_frag = floor(self.cfg.q_frag_ratio * q_remaining)
-        q_ref = q_remaining - q_frag
 
-        state = _State(leaves={c.cid: c for c in p0}, deltas={}, history={})
+        state = _State(leaves={c.cid: c for c in p0}, deltas={}, switches={}, history={})
         q_used = 0
 
         for comp in p0:
-            delta = self._delta(x, y_hat, m0, [comp])
+            delta, switch_flag = self._delta_switch(x, y_hat, m0, [comp])
             state.deltas[comp.cid] = delta
+            state.switches[comp.cid] = int(switch_flag)
             state.history[comp.cid] = delta
             q_used += 1
+
+        q_frag, q_ref = self._allocate_budget(q_remaining, state.deltas)
 
         q_ref_used = self._refine(x, y_hat, m0, state, q_ref)
         q_used += q_ref_used
@@ -112,6 +114,7 @@ class BeaconAudit:
             metadata={
                 "q_ref_alloc": float(q_ref),
                 "q_frag_alloc": float(q_frag),
+                "budget_mode": str(getattr(self.cfg, "budget_mode", "fixed")),
                 "leaf_components": [
                     (ls.component.cid, ls.component.t0, ls.component.t1, ls.component.c0, ls.component.c1)
                     for ls in leaf_stats
@@ -137,7 +140,10 @@ class BeaconAudit:
             elif self.cfg.refinement_policy == "none":
                 break
             else:
-                target_cid = max(queue, key=lambda cid: self._priority(state.deltas[cid], max_abs, m0_low))
+                target_cid = max(
+                    queue,
+                    key=lambda cid: self._priority(state.deltas[cid], state.switches.get(cid, 0), max_abs, m0_low),
+                )
 
             target = state.leaves[target_cid]
             children = self._split(target)
@@ -156,9 +162,10 @@ class BeaconAudit:
             queue.remove(target_cid)
 
             for child in children:
-                delta = self._delta(x, y_hat, m0, [child])
+                delta, switch_flag = self._delta_switch(x, y_hat, m0, [child])
                 state.leaves[child.cid] = child
                 state.deltas[child.cid] = delta
+                state.switches[child.cid] = int(switch_flag)
                 state.history[child.cid] = delta
                 if child.n_points >= self.cfg.l_min and self._split(child) and self._queue_accepts_delta(delta):
                     queue.add(child.cid)
@@ -244,18 +251,20 @@ class BeaconAudit:
             out.append(LeafStats(component=comp, delta=delta, abs_norm=abs(delta) / max_abs))
         return out
 
-    def _priority(self, delta: float, max_abs: float, m0_low: float) -> float:
+    def _priority(self, delta: float, switch_flag: int, max_abs: float, m0_low: float) -> float:
         s = abs(delta) / max_abs
         mode = str(getattr(self.cfg, "refinement_mode", "mixed"))
+        switch_bonus = float(getattr(self.cfg, "switch_eta", 0.0)) * float(switch_flag) if str(getattr(self.cfg, "priority_mode", "base")) == "switch" else 0.0
         if mode == "support":
-            return s + self.cfg.beta * float(delta > 0 and 0 < s < self.cfg.tau_s)
+            return s + self.cfg.beta * float(delta > 0 and 0 < s < self.cfg.tau_s) + switch_bonus
         if mode == "counter":
-            return s + self.cfg.alpha * float(delta < 0)
+            return s + self.cfg.alpha * float(delta < 0) + switch_bonus
         return (
             s
             + self.cfg.alpha * float(delta < 0)
             + self.cfg.beta * float(delta > 0 and 0 < s < self.cfg.tau_s)
             + self.cfg.gamma * m0_low * float(delta > 0)
+            + switch_bonus
         )
 
     def _queue_accepts_delta(self, delta: float) -> bool:
@@ -287,6 +296,29 @@ class BeaconAudit:
     def _delta(self, x: np.ndarray, y_hat: int, m0: float, components: Sequence[Component]) -> float:
         z = self.neutralizer(x, components)
         return m0 - self._margin(z, y_hat)
+
+    def _delta_switch(self, x: np.ndarray, y_hat: int, m0: float, components: Sequence[Component]) -> tuple[float, int]:
+        z = self.neutralizer(x, components)
+        logits = self.model_logits(z)
+        margin = self._margin_from_logits(logits, y_hat)
+        delta = m0 - margin
+        pred = int(np.argmax(logits))
+        return float(delta), int(pred != y_hat)
+
+    def _allocate_budget(self, q_remaining: int, deltas: Dict[str, float]) -> tuple[int, int]:
+        mode = str(getattr(self.cfg, "budget_mode", "fixed"))
+        if q_remaining <= 0:
+            return 0, 0
+        if mode == "conflict_first":
+            counter_mass = float(sum(max(-d, 0.0) for d in deltas.values()))
+            if counter_mass > float(getattr(self.cfg, "tau_conflict", 0.0)):
+                q_ref = int(round(0.85 * q_remaining))
+                q_ref = max(0, min(q_ref, q_remaining))
+                q_frag = q_remaining - q_ref
+                return q_frag, q_ref
+        q_frag = floor(self.cfg.q_frag_ratio * q_remaining)
+        q_ref = q_remaining - q_frag
+        return q_frag, q_ref
 
     def _margin(self, x: np.ndarray, y_hat: int) -> float:
         logits = self.model_logits(x)
