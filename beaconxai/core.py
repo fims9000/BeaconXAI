@@ -37,7 +37,8 @@ class BeaconAudit:
 
         logits0 = self.model_logits(x)
         y_hat = int(np.argmax(logits0))
-        m0 = self._margin_from_logits(logits0, y_hat)
+        competitor = self._competitor_from_logits(logits0, y_hat)
+        m0 = self._margin_from_logits(logits0, y_hat, competitor)
 
         p0 = self._make_partition(x.shape[0], x.shape[1], self.cfg.k0)
         q_init = len(p0)
@@ -50,15 +51,17 @@ class BeaconAudit:
         q_used = 0
 
         for comp in p0:
-            delta, switch_flag = self._delta_switch(x, y_hat, m0, [comp])
+            delta, switch_flag = self._delta_switch(x, y_hat, m0, [comp], competitor)
             state.deltas[comp.cid] = delta
             state.switches[comp.cid] = int(switch_flag)
             state.history[comp.cid] = delta
             q_used += 1
 
         q_frag, q_ref = self._allocate_budget(q_remaining, state.deltas)
+        if str(getattr(self.cfg, "audit_mode", "full")) == "counter_only":
+            q_frag = 0
 
-        q_ref_used = self._refine(x, y_hat, m0, state, q_ref)
+        q_ref_used = self._refine(x, y_hat, m0, state, q_ref, competitor)
         q_used += q_ref_used
 
         leaf_stats = self._leaf_stats(state)
@@ -72,7 +75,7 @@ class BeaconAudit:
 
         positive_all = sorted((ls for ls in leaf_stats if ls.delta > 0), key=lambda z: z.delta, reverse=True)
         rho_b, rho_b_cost, censored, q_frag_used, m_last, k_checked, support_mass_removed = self._fragility(
-            x, y_hat, m0, positive_all, q_frag
+            x, y_hat, m0, positive_all, q_frag, competitor
         )
         q_used += q_frag_used
 
@@ -80,9 +83,9 @@ class BeaconAudit:
         drop_ratio = float((m0 - m_last) / (abs(m0) + self.cfg.eps))
         residual_ratio = float(m_last / (abs(m0) + self.cfg.eps))
 
-        suff_margin, suff_keep = self._sufficiency(x, y_hat, state.leaves.values(), s_plus)
-        necessity = self._necessity(x, y_hat, m0, s_plus)
-        ce_gain = self._counter_evidence_gain(x, y_hat, m0, s_minus)
+        suff_margin, suff_keep = self._sufficiency(x, y_hat, competitor, state.leaves.values(), s_plus)
+        necessity = self._necessity(x, y_hat, competitor, m0, s_plus)
+        ce_gain = self._counter_evidence_gain(x, y_hat, competitor, m0, s_minus)
 
         return AuditResult(
             y_hat=y_hat,
@@ -123,7 +126,7 @@ class BeaconAudit:
             },
         )
 
-    def _refine(self, x: np.ndarray, y_hat: int, m0: float, state: _State, q_ref: int) -> int:
+    def _refine(self, x: np.ndarray, y_hat: int, m0: float, state: _State, q_ref: int, competitor: int | None) -> int:
         q_ref_used = 0
         queue: set[str] = {
             cid
@@ -162,7 +165,7 @@ class BeaconAudit:
             queue.remove(target_cid)
 
             for child in children:
-                delta, switch_flag = self._delta_switch(x, y_hat, m0, [child])
+                delta, switch_flag = self._delta_switch(x, y_hat, m0, [child], competitor)
                 state.leaves[child.cid] = child
                 state.deltas[child.cid] = delta
                 state.switches[child.cid] = int(switch_flag)
@@ -181,6 +184,7 @@ class BeaconAudit:
         m0: float,
         s_plus: Sequence[LeafStats],
         q_frag: int,
+        competitor: int | None,
     ) -> tuple[int, float, bool, int, float, int, float]:
         if not s_plus:
             return 1, 1.0, True, 0, float(m0), 0, 0.0
@@ -198,7 +202,7 @@ class BeaconAudit:
 
             selected.append(stat.component)
             z = self.neutralizer(x, selected)
-            margin = self._margin(z, y_hat)
+            margin = self._margin(z, y_hat, competitor)
             q_frag_used += 1
             checked_cost = components_cost(selected, total_points)
             margin_last = float(margin)
@@ -221,6 +225,7 @@ class BeaconAudit:
         self,
         x: np.ndarray,
         y_hat: int,
+        competitor: int | None,
         leaves: Iterable[Component],
         s_plus: Sequence[LeafStats],
     ) -> tuple[float, bool]:
@@ -228,20 +233,22 @@ class BeaconAudit:
         drop = [leaf for leaf in leaves if leaf.cid not in keep_ids]
         x_keep = self.neutralizer(x, drop)
         logits_keep = self.model_logits(x_keep)
-        margin_keep = self._margin_from_logits(logits_keep, y_hat)
+        margin_keep = self._margin_from_logits(logits_keep, y_hat, competitor)
         return margin_keep, int(np.argmax(logits_keep)) == y_hat
 
-    def _necessity(self, x: np.ndarray, y_hat: int, m0: float, s_plus: Sequence[LeafStats]) -> float:
+    def _necessity(self, x: np.ndarray, y_hat: int, competitor: int | None, m0: float, s_plus: Sequence[LeafStats]) -> float:
         if not s_plus:
             return 0.0
         z = self.neutralizer(x, [s.component for s in s_plus])
-        return m0 - self._margin(z, y_hat)
+        return m0 - self._margin(z, y_hat, competitor)
 
-    def _counter_evidence_gain(self, x: np.ndarray, y_hat: int, m0: float, s_minus: Sequence[LeafStats]) -> float:
+    def _counter_evidence_gain(
+        self, x: np.ndarray, y_hat: int, competitor: int | None, m0: float, s_minus: Sequence[LeafStats]
+    ) -> float:
         if not s_minus:
             return 0.0
         z = self.neutralizer(x, [s.component for s in s_minus])
-        return self._margin(z, y_hat) - m0
+        return self._margin(z, y_hat, competitor) - m0
 
     def _leaf_stats(self, state: _State) -> list[LeafStats]:
         max_abs = max(abs(state.deltas[cid]) for cid in state.leaves) + self.cfg.eps
@@ -268,6 +275,8 @@ class BeaconAudit:
         )
 
     def _queue_accepts_delta(self, delta: float) -> bool:
+        if str(getattr(self.cfg, "audit_mode", "full")) == "counter_only":
+            return bool(delta < 0)
         mode = str(getattr(self.cfg, "refinement_mode", "mixed"))
         if mode == "support":
             return bool(delta > 0)
@@ -293,14 +302,16 @@ class BeaconAudit:
             return float(min(1.0, base + (0.10 if censored else 0.0)))
         return float(base)
 
-    def _delta(self, x: np.ndarray, y_hat: int, m0: float, components: Sequence[Component]) -> float:
+    def _delta(self, x: np.ndarray, y_hat: int, m0: float, components: Sequence[Component], competitor: int | None = None) -> float:
         z = self.neutralizer(x, components)
-        return m0 - self._margin(z, y_hat)
+        return m0 - self._margin(z, y_hat, competitor)
 
-    def _delta_switch(self, x: np.ndarray, y_hat: int, m0: float, components: Sequence[Component]) -> tuple[float, int]:
+    def _delta_switch(
+        self, x: np.ndarray, y_hat: int, m0: float, components: Sequence[Component], competitor: int | None
+    ) -> tuple[float, int]:
         z = self.neutralizer(x, components)
         logits = self.model_logits(z)
-        margin = self._margin_from_logits(logits, y_hat)
+        margin = self._margin_from_logits(logits, y_hat, competitor)
         delta = m0 - margin
         pred = int(np.argmax(logits))
         return float(delta), int(pred != y_hat)
@@ -320,12 +331,20 @@ class BeaconAudit:
         q_ref = q_remaining - q_frag
         return q_frag, q_ref
 
-    def _margin(self, x: np.ndarray, y_hat: int) -> float:
+    def _margin(self, x: np.ndarray, y_hat: int, competitor: int | None = None) -> float:
         logits = self.model_logits(x)
-        return self._margin_from_logits(logits, y_hat)
+        return self._margin_from_logits(logits, y_hat, competitor)
 
     @staticmethod
-    def _margin_from_logits(logits: np.ndarray, y_hat: int) -> float:
+    def _competitor_from_logits(logits: np.ndarray, y_hat: int) -> int:
+        return int(np.argmax(np.where(np.arange(len(logits)) == y_hat, -np.inf, logits)))
+
+    def _margin_from_logits(self, logits: np.ndarray, y_hat: int, competitor: int | None = None) -> float:
         ref = float(logits[y_hat])
-        alt = float(np.max(np.delete(logits, y_hat)))
+        mode = str(getattr(self.cfg, "margin_mode", "adaptive_all"))
+        if mode == "nearest_competitor":
+            c = self._competitor_from_logits(logits, y_hat) if competitor is None else int(competitor)
+            alt = float(logits[c])
+        else:
+            alt = float(np.max(np.delete(logits, y_hat)))
         return ref - alt

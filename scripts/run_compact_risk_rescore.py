@@ -256,6 +256,9 @@ def _run_dataset(
     switch_eta: float,
     budget_mode: str,
     tau_conflict: float,
+    margin_mode: str,
+    audit_mode: str,
+    partition_mode: str,
 ) -> list[dict]:
     print(f"[rescore] dataset={dataset} model={model} q={q_values}", flush=True)
     if dataset == "har":
@@ -336,7 +339,9 @@ def _run_dataset(
         switch_eta=switch_eta,
         budget_mode=budget_mode,
         tau_conflict=tau_conflict,
-        partition_mode="time_only",
+        margin_mode=margin_mode,
+        audit_mode=audit_mode,
+        partition_mode=partition_mode,
         risk_policy="rho_only",
     )
 
@@ -456,6 +461,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--switch-eta", type=float, default=0.0)
     p.add_argument("--budget-mode", choices=["fixed", "conflict_first"], default="fixed")
     p.add_argument("--tau-conflict", type=float, default=0.0)
+    p.add_argument("--margin-mode", choices=["adaptive_all", "nearest_competitor"], default="adaptive_all")
+    p.add_argument("--audit-mode", choices=["full", "counter_only"], default="full")
+    p.add_argument("--partition-mode", choices=["time_only", "time_channel", "channel_time"], default="time_only")
     p.add_argument("--out", required=True)
     return p.parse_args()
 
@@ -481,6 +489,9 @@ def main() -> None:
         switch_eta=args.switch_eta,
         budget_mode=args.budget_mode,
         tau_conflict=args.tau_conflict,
+        margin_mode=args.margin_mode,
+        audit_mode=args.audit_mode,
+        partition_mode=args.partition_mode,
     )
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

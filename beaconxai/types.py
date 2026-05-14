@@ -50,6 +50,8 @@ class BeaconConfig:
     switch_eta: float = 0.0
     budget_mode: str = "fixed"
     tau_conflict: float = 0.0
+    margin_mode: str = "adaptive_all"
+    audit_mode: str = "full"
     partition_mode: str = "time_only"
     risk_policy: str = "rho_only"
 
