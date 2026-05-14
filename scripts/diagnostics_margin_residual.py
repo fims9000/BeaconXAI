@@ -8,7 +8,9 @@ import sys
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import SplineTransformer
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -78,24 +80,29 @@ def _collect(rows: list[RiskEvalRow], local_rows: list[LocalMetricRow], q: int):
     return y, neg_margin, mneg, ce, rho
 
 
-def _fit_margin_conditional_expectation(margin: np.ndarray, cmass: np.ndarray, n_bins: int = 10):
-    qs = np.quantile(margin, np.linspace(0.0, 1.0, n_bins + 1))
-    qs[0] -= 1e-12
-    qs[-1] += 1e-12
-    means = np.zeros(n_bins, dtype=np.float64)
-    for j in range(n_bins):
-        m = (margin > qs[j]) & (margin <= qs[j + 1])
-        means[j] = float(np.mean(cmass[m])) if np.any(m) else float(np.mean(cmass))
-    return qs, means
+def _fit_smooth_mu_sigma(margin_v: np.ndarray, cmass_v: np.ndarray, n_knots: int = 6):
+    x = margin_v.reshape(-1, 1)
+    spl = SplineTransformer(n_knots=n_knots, degree=3, include_bias=False)
+    Xs = spl.fit_transform(x)
+    mu_model = Ridge(alpha=1.0)
+    mu_model.fit(Xs, cmass_v)
+    mu_v = mu_model.predict(Xs)
+
+    resid = cmass_v - mu_v
+    # Smooth conditional std via squared residuals.
+    std_model = Ridge(alpha=1.0)
+    std_model.fit(Xs, resid * resid)
+    return spl, mu_model, std_model
 
 
-def _predict_conditional_mean(margin: np.ndarray, qs: np.ndarray, means: np.ndarray) -> np.ndarray:
-    out = np.empty_like(margin, dtype=np.float64)
-    for i, v in enumerate(margin):
-        j = int(np.searchsorted(qs, v, side="right") - 1)
-        j = max(0, min(j, len(means) - 1))
-        out[i] = means[j]
-    return out
+def _predict_mu_sigma(
+    margin: np.ndarray, spl: SplineTransformer, mu_model: Ridge, std_model: Ridge
+) -> tuple[np.ndarray, np.ndarray]:
+    Xs = spl.transform(margin.reshape(-1, 1))
+    mu = mu_model.predict(Xs)
+    var = std_model.predict(Xs)
+    sigma = np.sqrt(np.maximum(var, 1e-8))
+    return mu, sigma
 
 
 def _fit_lambda(y: np.ndarray, m: np.ndarray, z: np.ndarray) -> float:
@@ -137,6 +144,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cnn-epochs", type=int, default=8)
     p.add_argument("--pamap-npz", default="./data/pamap2_acc9_w200s100_p095.npz")
     p.add_argument("--har-root", default="./data")
+    p.add_argument("--n-knots", type=int, default=6)
     p.add_argument("--out-prefix", default="./outputs_composite/diagnostics_margin_residual")
     return p.parse_args()
 
@@ -241,24 +249,28 @@ def main() -> None:
     yv, mv, cmv, cev, rhov = cv
     yt, mt, cmt, cet, rhot = ct
 
-    # residual conflict
-    qs, means = _fit_margin_conditional_expectation(mv, cmv, n_bins=10)
-    mu_t = _predict_conditional_mean(mt, qs, means)
+    # residual conflict: smooth E[M^-|margin] and conditional sigma.
+    spl, mu_model, std_model = _fit_smooth_mu_sigma(mv, cmv, n_knots=args.n_knots)
+    mu_t, sig_t = _predict_mu_sigma(mt, spl, mu_model, std_model)
     c_perp_t = cmt - mu_t
     c_rel_t = cmt / np.maximum(mu_t, 1e-8)
-    mu_v = _predict_conditional_mean(mv, qs, means)
+    c_z_t = (cmt - mu_t) / np.maximum(sig_t, 1e-8)
+    mu_v, sig_v = _predict_mu_sigma(mv, spl, mu_model, std_model)
     c_perp_v = cmv - mu_v
     c_rel_v = cmv / np.maximum(mu_v, 1e-8)
+    c_z_v = (cmv - mu_v) / np.maximum(sig_v, 1e-8)
 
     # fit lambda on val
     lam_m = _fit_lambda(yv, mv, cmv)
     lam_cp = _fit_lambda(yv, mv, c_perp_v)
     lam_cr = _fit_lambda(yv, mv, c_rel_v)
+    lam_cz = _fit_lambda(yv, mv, c_z_v)
 
     score_margin = mt
     score_m = mt + lam_m * cmt
     score_cp = mt + lam_cp * c_perp_t
     score_cr = mt + lam_cr * c_rel_t
+    score_cz = mt + lam_cz * c_z_t
 
     # correlations
     def _corr(a: np.ndarray, b: np.ndarray) -> float:
@@ -272,10 +284,13 @@ def main() -> None:
         {"feature": "rho_cost", "corr_with_neg_margin": _corr(rhot, mt), "auc": _auc(yt, rhot)},
         {"feature": "C_perp", "corr_with_neg_margin": _corr(c_perp_t, mt), "auc": _auc(yt, c_perp_t)},
         {"feature": "C_rel", "corr_with_neg_margin": _corr(c_rel_t, mt), "auc": _auc(yt, c_rel_t)},
+        {"feature": "C_z", "corr_with_neg_margin": _corr(c_z_t, mt), "auc": _auc(yt, c_z_t)},
         {"feature": "corr(C_perp,counter_mass)", "corr_with_neg_margin": _corr(c_perp_t, cmt), "auc": float("nan")},
         {"feature": "corr(C_rel,counter_mass)", "corr_with_neg_margin": _corr(c_rel_t, cmt), "auc": float("nan")},
+        {"feature": "corr(C_z,counter_mass)", "corr_with_neg_margin": _corr(c_z_t, cmt), "auc": float("nan")},
         {"feature": "corr(C_perp,error)", "corr_with_neg_margin": _corr(c_perp_t, yt.astype(np.float64)), "auc": float("nan")},
         {"feature": "AUC(-C_perp)", "corr_with_neg_margin": float("nan"), "auc": _auc(yt, -c_perp_t)},
+        {"feature": "AUC(-C_z)", "corr_with_neg_margin": float("nan"), "auc": _auc(yt, -c_z_t)},
     ]
 
     score_m_ce = _fit_logreg_score(yv, np.stack([mv, cev], axis=1), np.stack([mt, cet], axis=1), args.seed + 31)
@@ -284,6 +299,9 @@ def main() -> None:
     )
     score_m_cm_cp = _fit_logreg_score(
         yv, np.stack([mv, cmv, c_perp_v], axis=1), np.stack([mt, cmt, c_perp_t], axis=1), args.seed + 51
+    )
+    score_m_cm_cz = _fit_logreg_score(
+        yv, np.stack([mv, cmv, c_z_v], axis=1), np.stack([mt, cmt, c_z_t], axis=1), args.seed + 55
     )
     score_m_cm_ce_cp = _fit_logreg_score(
         yv,
@@ -298,9 +316,12 @@ def main() -> None:
         ("margin+CE", score_m_ce),
         ("margin+counter_mass+CE", score_m_cm_ce),
         ("margin+counter_mass+C_perp", score_m_cm_cp),
+        ("margin+counter_mass+C_z", score_m_cm_cz),
         ("margin+counter_mass+CE+C_perp", score_m_cm_ce_cp),
         ("margin+C_perp", score_cp),
         ("margin-C_perp", mt - lam_cp * c_perp_t),
+        ("margin+C_z", score_cz),
+        ("margin-C_z", mt - lam_cz * c_z_t),
         ("margin+C_rel", score_cr),
     ]
 
@@ -337,30 +358,53 @@ def main() -> None:
             }
         )
 
-    # margin-bins test for independent signal
-    bins = np.quantile(mt, [0.0, 0.25, 0.5, 0.75, 1.0])
-    bins[0] -= 1e-12
-    bins[-1] += 1e-12
-    bin_rows = []
-    for j in range(4):
-        m = (mt > bins[j]) & (mt <= bins[j + 1])
-        if np.sum(m) < 20:
+    # high-margin subset analysis (margin high => neg_margin low).
+    high_rows = []
+    margin_true = -mt
+    rank_margin = np.argsort(np.argsort(-score_margin))
+    rank_beacon = np.argsort(np.argsort(-score_m))
+    err_mask = yt == 1
+    for qlab, qv in [("all", None), ("top50_margin", 0.50), ("top25_margin", 0.75), ("top10_margin", 0.90)]:
+        if qv is None:
+            msk = np.ones_like(yt, dtype=bool)
+        else:
+            thr = float(np.quantile(margin_true, qv))
+            msk = margin_true >= thr
+        if np.sum(msk) < 20:
             continue
-        bin_rows.append(
+        y_sub = yt[msk]
+        s_m = score_margin[msk]
+        s_b = score_m[msk]
+        p10_m = _precision_at_10(y_sub, s_m)
+        p10_b = _precision_at_10(y_sub, s_b)
+        err_sub = np.where(err_mask & msk)[0]
+        rank_imp = (
+            float(np.mean(rank_margin[err_sub] - rank_beacon[err_sub])) if len(err_sub) > 0 else float("nan")
+        )
+        high_rows.append(
             {
-                "bin": j,
-                "n": int(np.sum(m)),
-                "auc_counter_mass": _auc(yt[m], cmt[m]),
-                "auc_C_perp": _auc(yt[m], c_perp_t[m]),
-                "auc_C_rel": _auc(yt[m], c_rel_t[m]),
+                "subset": qlab,
+                "n": int(np.sum(msk)),
+                "n_errors": int(np.sum(y_sub)),
+                "p10_margin": p10_m,
+                "p10_margin_plus_counter": p10_b,
+                "delta_p10": float(p10_b - p10_m),
+                "mean_error_rank_improvement": rank_imp,
             }
         )
 
     out_diag = Path(f"{args.out_prefix}_{args.dataset}_{args.model}_diag.csv")
     out_eval = Path(f"{args.out_prefix}_{args.dataset}_{args.model}_eval.csv")
     out_bins = Path(f"{args.out_prefix}_{args.dataset}_{args.model}_bins.csv")
+    out_high = Path(f"{args.out_prefix}_{args.dataset}_{args.model}_high_margin.csv")
     out_sign = Path(f"{args.out_prefix}_{args.dataset}_{args.model}_sign_audit.csv")
-    for path, rows in [(out_diag, diag_rows), (out_eval, eval_rows), (out_bins, bin_rows), (out_sign, sign_rows)]:
+    for path, rows in [
+        (out_diag, diag_rows),
+        (out_eval, eval_rows),
+        (out_bins, []),
+        (out_high, high_rows),
+        (out_sign, sign_rows),
+    ]:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", newline="", encoding="utf-8") as f:
             if rows:
@@ -370,7 +414,7 @@ def main() -> None:
     print("Saved:")
     print(out_diag)
     print(out_eval)
-    print(out_bins)
+    print(out_high)
     print(out_sign)
 
 
