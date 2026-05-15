@@ -1,48 +1,30 @@
 # BeaconXAI
 
-BEACON-XAI is a research codebase for **budgeted black-box counter-evidence analysis**.
-It focuses on low-query settings (`Q=8..16`) where we need a short ranked list of suspicious input components rather than a full attribution map.
+BEACON-XAI is a research codebase for **budgeted counter-evidence shortlisting** in low-query black-box settings.
+The main target is multichannel time series, with additional tabular pilots.
 
-## Scope
+## What This Repo Contains
 
-- Core method: BEACON (budgeted counter-evidence shortlisting)
-- Target domain: multichannel time-series
-- Models: black-box compatible (e.g., ExtraTrees), plus differentiable models (CNN) for gradient baselines
-- Evaluation: component-level localization and shortlisting
+- `beaconxai/` — core method implementation (partitioning, neutralization, audit logic)
+- `scripts/` — experiments and table/figure generation
+- `tests/` — smoke/unit tests
+- `requirements.txt` — minimal base deps
 
-## Repository Structure
-
-- `beaconxai/` — core library (audit, partitioning, neutralization, scoring)
-- `scripts/` — runnable experiments and preprocessing scripts
-- `tests/` — smoke/unit checks
-- `data/` — local datasets (gitignored)
-- `outputs*/` — local artifacts/results (gitignored)
+`data/` and `outputs*/` are local-only (gitignored).
 
 ## Environment
-
-Use a local virtual environment (example `.venv`):
 
 ```bash
 python -m venv .venv
 .venv/bin/pip install -r requirements.txt
-```
-
-For recent experiments, additional packages are used:
-
-```bash
 .venv/bin/pip install xgboost shap lime matplotlib
 ```
 
-## Key Scripts (Current)
+## Reproduce Main Paper Blocks
 
-### Component-level time-series benchmark
+All commands below write artifacts to `outputs_composite/`.
 
-- `scripts/run_component_conflict_benchmark.py`
-
-Main use: evaluate BEACON / uniform / random / leave-one-group-out on
-`sensor_group × time_bin` components with strict budget.
-
-Example:
+### 1) Component-level benchmark (PAMAP2/WISDM)
 
 ```bash
 .venv/bin/python scripts/run_component_conflict_benchmark.py \
@@ -50,20 +32,11 @@ Example:
   --dataset-name pamap2 --model extratrees \
   --q-values 8,16 --group-mode pamap3 --time-bins 12 \
   --neutralizer interp --partition-mode sensor_group_time \
-  --out outputs_composite/pamap2_component.csv \
-  --per-sample-out outputs_composite/pamap2_component_per_sample.csv
+  --out outputs_composite/component_localization_results_table.csv \
+  --per-sample-out outputs_composite/component_localization_per_sample.csv
 ```
 
-### Adapted time-series attribution baselines (PAMAP2)
-
-- `scripts/run_pamap2_tsxai_baselines.py`
-
-Compares BEACON (Q=16) against:
-- RISE-style random masking (`64/128/256/512` calls)
-- KernelSHAP-over-components (`128/256/512` calls)
-- plus uniform/random references
-
-Example:
+### 2) Adapted TS-XAI baselines (RISE-style, KernelSHAP-components)
 
 ```bash
 .venv/bin/python scripts/run_pamap2_tsxai_baselines.py \
@@ -71,38 +44,55 @@ Example:
   --out-per-sample outputs_composite/pamap2_tsxai_baselines_per_sample.csv
 ```
 
-### Tabular pilot (appendix-style)
+### 3) Tabular pilot (Adult, RF/XGB)
 
-- `scripts/run_tabular_conflict_benchmark.py`
+```bash
+.venv/bin/python scripts/run_tabular_conflict_benchmark.py \
+  --out-dir outputs_composite
+```
 
-Runs Adult conflict injection with RF/XGBoost and compares:
-BEACON / uniform / random / LIME / KernelSHAP.
+### 4) Practical HAR portability/fault blocks
 
-## Current Paper-Oriented Artifacts
+```bash
+.venv/bin/python scripts/run_har_sensor_fault_benchmark.py \
+  --out-summary outputs_composite/har_sensor_fault_localization_table.csv \
+  --out-per-sample outputs_composite/har_sensor_fault_localization_per_sample.csv
 
-Local (gitignored) article tables are generated under `outputs_composite/`, e.g.:
+.venv/bin/python scripts/run_har_hidden_conflict_benchmark.py \
+  --out-summary outputs_composite/har_hidden_conflict_localization_table.csv \
+  --out-per-sample outputs_composite/har_hidden_conflict_localization_per_sample.csv
 
-- `component_main_table_article.csv`
-- `pamap2_sensitivity_table_article.csv`
-- `pamap2_neutralizer_ablation_article.csv`
-- `pamap2_tsxai_comparison_table_article.csv`
+.venv/bin/python scripts/measure_portability.py \
+  --out outputs_composite/edge_portability_profile.csv
+```
 
-Draft text files (also local) are maintained in `outputs_composite/` during writing.
+### 5) Audit panel tables
+
+```bash
+.venv/bin/python scripts/make_audit_panel_tables.py --n-boot 1000
+```
+
+## Final Aggregated Results File
+
+Primary one-file summary for manuscript work:
+
+- `outputs_composite/article_results_all_in_one.md`
 
 ## Reproducibility Notes
 
-- Many scripts use fixed `--seed 42` by default.
-- All budget comparisons should be interpreted together with **model call counts**.
-- In low-dimensional settings (e.g., Adult with 14 features), uniform occlusion can be near-exhaustive under moderate budgets.
+- Default random seed is typically `42` (see each script).
+- Compare methods together with `model calls`, not only ranking metrics.
+- In low-dimensional tabular settings, uniform occlusion can be near-exhaustive at moderate budgets.
+- For portability profiling, CPU-affinity/nice constraints are supported; fixed frequency may require root/system support.
 
-## Testing / Sanity
-
-Quick compile check:
+## Sanity Check
 
 ```bash
 .venv/bin/python -m py_compile beaconxai/*.py scripts/*.py tests/*.py
 ```
 
-## License
+## Pre-Publication Checklist
 
-No explicit license file is included yet. Add one before public release.
+- Add explicit `LICENSE` file.
+- Add canonical citation metadata (`CITATION.cff` or BibTeX in docs).
+- Ensure referenced figures/tables in manuscript are present and numbered consistently.
