@@ -110,6 +110,6 @@ Primary one-file summary for manuscript work:
 
 ## Pre-Publication Checklist
 
-- Add explicit `LICENSE` file.
+- Verify `LICENSE`, citation metadata (`CITATION.cff`) and reproducibility commands before submission.
 - Add canonical citation metadata (`CITATION.cff` or BibTeX in docs).
 - Ensure referenced figures/tables in manuscript are present and numbered consistently.

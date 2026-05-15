@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+title: "BeaconXAI: Budgeted Counter-Evidence Shortlisting for Portable AI Audits"
+message: "If you use this software, please cite it using this metadata."
+type: software
+authors:
+  - family-names: "Lebedev"
+    given-names: "Yuriy"
+repository-code: "https://github.com/fims9000/BeaconXAI"
+license: "MIT"
+keywords:
+  - explainable-ai
+  - time-series
+  - black-box-audit
+  - counter-evidence
+  - edge-ai
