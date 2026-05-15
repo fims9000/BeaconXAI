@@ -276,6 +276,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--nice-level', type=int, default=10)
     p.add_argument('--adaptive-phase1-ratio', type=float, default=0.25)
     p.add_argument('--adaptive-early-eff', type=float, default=0.12)
+    p.add_argument('--include-fast-core', action='store_true', help='Include beacon_core_fast_q* rows')
+    p.add_argument('--no-adaptive', action='store_true', help='Skip beacon_adaptive_q* rows')
     p.add_argument('--out', default='outputs_composite/edge_portability_profile.csv')
     return p.parse_args()
 
@@ -407,46 +409,48 @@ def main() -> None:
             q,
             call_counter_fn=lambda r: float(getattr(r, 'q_used', q)) + 1.0,
         )
-        cfg_fast = BeaconConfig(
-            q_max=q,
-            k0=4 if q <= 8 else 8,
-            l_min=4,
-            k_pos=3,
-            k_neg=3,
-            partition_mode='sensor_group_time',
-            refinement_mode='mixed',
-            margin_mode='adaptive_all',
-            risk_policy='rho_only',
-            audit_mode='full',
-            fast_core=True,
-        )
-        audit_fast = BeaconAudit(
-            model_logits=clf.logits,
-            neutralizer=Neutralizer(mode=args.neutralizer, channel_means=np.zeros(n_channels, dtype=np.float32)),
-            config=cfg_fast,
-        )
-        run_profile(
-            f'beacon_core_fast_q{q}',
-            lambda x, _a=audit_fast: _a.audit(x),
-            q,
-            call_counter_fn=lambda r: float(getattr(r, 'q_used', q)) + 1.0,
-        )
+        if args.include_fast_core:
+            cfg_fast = BeaconConfig(
+                q_max=q,
+                k0=4 if q <= 8 else 8,
+                l_min=4,
+                k_pos=3,
+                k_neg=3,
+                partition_mode='sensor_group_time',
+                refinement_mode='mixed',
+                margin_mode='adaptive_all',
+                risk_policy='rho_only',
+                audit_mode='full',
+                fast_core=True,
+            )
+            audit_fast = BeaconAudit(
+                model_logits=clf.logits,
+                neutralizer=Neutralizer(mode=args.neutralizer, channel_means=np.zeros(n_channels, dtype=np.float32)),
+                config=cfg_fast,
+            )
+            run_profile(
+                f'beacon_core_fast_q{q}',
+                lambda x, _a=audit_fast: _a.audit(x),
+                q,
+                call_counter_fn=lambda r: float(getattr(r, 'q_used', q)) + 1.0,
+            )
 
-        run_profile(
-            f'beacon_adaptive_q{q}',
-            lambda x, _q=q: _adaptive_calls(
-                x,
-                clf.logits,
-                _q,
-                args.neutralizer,
-                t_slices,
-                ref_corr,
-                phase1_ratio=args.adaptive_phase1_ratio,
-                early_eff=args.adaptive_early_eff,
-            ),
-            q,
-            call_counter_fn=lambda c: float(c),
-        )
+        if not args.no_adaptive:
+            run_profile(
+                f'beacon_adaptive_q{q}',
+                lambda x, _q=q: _adaptive_calls(
+                    x,
+                    clf.logits,
+                    _q,
+                    args.neutralizer,
+                    t_slices,
+                    ref_corr,
+                    phase1_ratio=args.adaptive_phase1_ratio,
+                    early_eff=args.adaptive_early_eff,
+                ),
+                q,
+                call_counter_fn=lambda c: float(c),
+            )
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
