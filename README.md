@@ -64,6 +64,10 @@ All commands below write artifacts to `outputs_composite/`.
 
 .venv/bin/python scripts/measure_portability.py \
   --out outputs_composite/edge_portability_profile.csv
+
+.venv/bin/python scripts/estimate_resource_budget.py \
+  --profile-csv outputs_composite/edge_portability_profile.csv \
+  --out outputs_composite/edge_resource_budget_table.csv
 ```
 
 ### 5) Audit panel tables
@@ -93,6 +97,7 @@ make all
 Primary one-file summary for manuscript work:
 
 - `outputs_composite/article_results_all_in_one.md`
+- `outputs_composite/edge_resource_budget_table.csv`
 
 ## Reproducibility Notes
 

@@ -1,6 +1,6 @@
 PY ?= .venv/bin/python
 
-.PHONY: sanity data-har data-pamap2 data-wisdm hidden-conflict portability significance all
+.PHONY: sanity data-har data-pamap2 data-wisdm hidden-conflict portability significance resource-budget all
 
 sanity:
 	$(PY) -m py_compile beaconxai/*.py scripts/*.py tests/*.py
@@ -22,10 +22,15 @@ hidden-conflict:
 portability:
 	$(PY) scripts/measure_portability.py --out outputs_composite/edge_portability_profile.csv
 
+resource-budget:
+	$(PY) scripts/estimate_resource_budget.py \
+		--profile-csv outputs_composite/edge_portability_profile.csv \
+		--out outputs_composite/edge_resource_budget_table.csv
+
 significance:
 	$(PY) scripts/compute_hidden_conflict_significance.py \
 		--per-sample outputs_composite/har_hidden_conflict_localization_per_sample.csv \
 		--out outputs_composite/table8_significance.csv
 
-all: hidden-conflict portability significance
+all: hidden-conflict portability resource-budget significance
 	@echo "Done. See outputs_composite/ for generated artifacts."
