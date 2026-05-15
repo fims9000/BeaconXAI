@@ -55,7 +55,8 @@ class Neutralizer:
         span = max(right - left, 1)
         left_val = z[left, c0:c1]
         right_val = z[right, c0:c1]
-
-        for t in range(t0, t1):
-            alpha = (t - left) / span
-            z[t, c0:c1] = (1.0 - alpha) * left_val + alpha * right_val
+        n = t1 - t0
+        if n <= 0:
+            return
+        alpha = ((np.arange(t0, t1, dtype=np.float64) - left) / span).reshape(-1, 1)
+        z[t0:t1, c0:c1] = (1.0 - alpha) * left_val + alpha * right_val

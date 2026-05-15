@@ -56,6 +56,7 @@ class BeaconConfig:
     risk_policy: str = "rho_only"
 
     stop_if_not_enough_ref_budget: bool = True
+    fast_core: bool = False
 
 
 @dataclass

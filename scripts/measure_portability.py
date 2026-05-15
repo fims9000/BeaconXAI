@@ -407,6 +407,30 @@ def main() -> None:
             q,
             call_counter_fn=lambda r: float(getattr(r, 'q_used', q)) + 1.0,
         )
+        cfg_fast = BeaconConfig(
+            q_max=q,
+            k0=4 if q <= 8 else 8,
+            l_min=4,
+            k_pos=3,
+            k_neg=3,
+            partition_mode='sensor_group_time',
+            refinement_mode='mixed',
+            margin_mode='adaptive_all',
+            risk_policy='rho_only',
+            audit_mode='full',
+            fast_core=True,
+        )
+        audit_fast = BeaconAudit(
+            model_logits=clf.logits,
+            neutralizer=Neutralizer(mode=args.neutralizer, channel_means=np.zeros(n_channels, dtype=np.float32)),
+            config=cfg_fast,
+        )
+        run_profile(
+            f'beacon_core_fast_q{q}',
+            lambda x, _a=audit_fast: _a.audit(x),
+            q,
+            call_counter_fn=lambda r: float(getattr(r, 'q_used', q)) + 1.0,
+        )
 
         run_profile(
             f'beacon_adaptive_q{q}',

@@ -50,9 +50,10 @@ class BeaconAudit:
 
         state = _State(leaves={c.cid: c for c in p0}, deltas={}, switches={}, history={})
         q_used = 0
+        x_work = x.copy() if bool(getattr(self.cfg, "fast_core", False)) else None
 
         for comp in p0:
-            delta, switch_flag = self._delta_switch(x, y_hat, m0, [comp], competitor)
+            delta, switch_flag = self._delta_switch(x, y_hat, m0, [comp], competitor, x_work=x_work)
             state.deltas[comp.cid] = delta
             state.switches[comp.cid] = int(switch_flag)
             state.history[comp.cid] = delta
@@ -62,7 +63,7 @@ class BeaconAudit:
         if str(getattr(self.cfg, "audit_mode", "full")) == "counter_only":
             q_frag = 0
 
-        q_ref_used = self._refine(x, y_hat, m0, state, q_ref, competitor)
+        q_ref_used = self._refine(x, y_hat, m0, state, q_ref, competitor, x_work=x_work)
         q_used += q_ref_used
 
         leaf_stats = self._leaf_stats(state)
@@ -127,7 +128,16 @@ class BeaconAudit:
             },
         )
 
-    def _refine(self, x: np.ndarray, y_hat: int, m0: float, state: _State, q_ref: int, competitor: int | None) -> int:
+    def _refine(
+        self,
+        x: np.ndarray,
+        y_hat: int,
+        m0: float,
+        state: _State,
+        q_ref: int,
+        competitor: int | None,
+        x_work: np.ndarray | None = None,
+    ) -> int:
         q_ref_used = 0
         queue: set[str] = {
             cid
@@ -166,7 +176,7 @@ class BeaconAudit:
             queue.remove(target_cid)
 
             for child in children:
-                delta, switch_flag = self._delta_switch(x, y_hat, m0, [child], competitor)
+                delta, switch_flag = self._delta_switch(x, y_hat, m0, [child], competitor, x_work=x_work)
                 state.leaves[child.cid] = child
                 state.deltas[child.cid] = delta
                 state.switches[child.cid] = int(switch_flag)
@@ -310,14 +320,61 @@ class BeaconAudit:
         return m0 - self._margin(z, y_hat, competitor)
 
     def _delta_switch(
-        self, x: np.ndarray, y_hat: int, m0: float, components: Sequence[Component], competitor: int | None
+        self,
+        x: np.ndarray,
+        y_hat: int,
+        m0: float,
+        components: Sequence[Component],
+        competitor: int | None,
+        x_work: np.ndarray | None = None,
     ) -> tuple[float, int]:
+        if (
+            x_work is not None
+            and len(components) == 1
+            and self.neutralizer.mode in ("zero", "mean", "interp")
+        ):
+            comp = components[0]
+            self._apply_component_inplace(x_work, comp)
+            logits = self.model_logits(x_work)
+            x_work[comp.t0 : comp.t1, comp.c0 : comp.c1] = x[comp.t0 : comp.t1, comp.c0 : comp.c1]
+            margin = self._margin_from_logits(logits, y_hat, competitor)
+            delta = m0 - margin
+            pred = int(np.argmax(logits))
+            return float(delta), int(pred != y_hat)
+
         z = self.neutralizer(x, components)
         logits = self.model_logits(z)
         margin = self._margin_from_logits(logits, y_hat, competitor)
         delta = m0 - margin
         pred = int(np.argmax(logits))
         return float(delta), int(pred != y_hat)
+
+    def _apply_component_inplace(self, z: np.ndarray, comp: Component) -> None:
+        if self.neutralizer.mode == "zero":
+            z[comp.t0 : comp.t1, comp.c0 : comp.c1] = 0.0
+            return
+        if self.neutralizer.mode == "mean":
+            means = self.neutralizer.channel_means[comp.c0 : comp.c1]
+            z[comp.t0 : comp.t1, comp.c0 : comp.c1] = means
+            return
+
+        t0, t1, c0, c1 = comp.t0, comp.t1, comp.c0, comp.c1
+        t_steps = z.shape[0]
+        left = max(t0 - 1, 0)
+        right = min(t1, t_steps - 1)
+
+        if left == right:
+            z[t0:t1, c0:c1] = z[left, c0:c1]
+            return
+
+        span = max(right - left, 1)
+        left_val = z[left, c0:c1]
+        right_val = z[right, c0:c1]
+        n = t1 - t0
+        if n <= 0:
+            return
+        alpha = ((np.arange(t0, t1, dtype=np.float64) - left) / span).reshape(-1, 1)
+        z[t0:t1, c0:c1] = (1.0 - alpha) * left_val + alpha * right_val
 
     def _allocate_budget(self, q_remaining: int, deltas: Dict[str, float]) -> tuple[int, int]:
         mode = str(getattr(self.cfg, "budget_mode", "fixed"))
