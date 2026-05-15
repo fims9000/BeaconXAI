@@ -1,0 +1,31 @@
+PY ?= .venv/bin/python
+
+.PHONY: sanity data-har data-pamap2 data-wisdm hidden-conflict portability significance all
+
+sanity:
+	$(PY) -m py_compile beaconxai/*.py scripts/*.py tests/*.py
+
+data-har:
+	$(PY) scripts/make_uci_har_shifted_npz.py --dataset-root data --out data/uci_har_shifted.npz
+
+data-pamap2:
+	$(PY) scripts/preprocess_pamap2.py --data-root data --out data/pamap2_acc9_w200s100_p095.npz
+
+data-wisdm:
+	$(PY) scripts/preprocess_wisdm_uci_raw.py --root data/wisdm_raw/wisdm-dataset/raw --out data/wisdm_phone_accel_gyro.npz
+
+hidden-conflict:
+	$(PY) scripts/run_har_hidden_conflict_benchmark.py \
+		--out-summary outputs_composite/har_hidden_conflict_localization_table.csv \
+		--out-per-sample outputs_composite/har_hidden_conflict_localization_per_sample.csv
+
+portability:
+	$(PY) scripts/measure_portability.py --out outputs_composite/edge_portability_profile.csv
+
+significance:
+	$(PY) scripts/compute_hidden_conflict_significance.py \
+		--per-sample outputs_composite/har_hidden_conflict_localization_per_sample.csv \
+		--out outputs_composite/table8_significance.csv
+
+all: hidden-conflict portability significance
+	@echo "Done. See outputs_composite/ for generated artifacts."

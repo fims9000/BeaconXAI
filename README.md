@@ -17,7 +17,7 @@ The main target is multichannel time series, with additional tabular pilots.
 ```bash
 python -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/pip install xgboost shap lime matplotlib
+.venv/bin/pip install -r requirements-extra.txt
 ```
 
 ## Reproduce Main Paper Blocks
@@ -72,6 +72,22 @@ All commands below write artifacts to `outputs_composite/`.
 .venv/bin/python scripts/make_audit_panel_tables.py --n-boot 1000
 ```
 
+### 6) Hidden-conflict significance (paired bootstrap)
+
+```bash
+.venv/bin/python scripts/compute_hidden_conflict_significance.py \
+  --per-sample outputs_composite/har_hidden_conflict_localization_per_sample.csv \
+  --out outputs_composite/table8_significance.csv
+```
+
+### 7) One-command paper rerun
+
+```bash
+make all
+# or
+.venv/bin/python scripts/run_all.py
+```
+
 ## Final Aggregated Results File
 
 Primary one-file summary for manuscript work:
@@ -84,6 +100,7 @@ Primary one-file summary for manuscript work:
 - Compare methods together with `model calls`, not only ranking metrics.
 - In low-dimensional tabular settings, uniform occlusion can be near-exhaustive at moderate budgets.
 - For portability profiling, CPU-affinity/nice constraints are supported; fixed frequency may require root/system support.
+- Data preparation steps are documented in `DATA_PREPARATION.md`.
 
 ## Sanity Check
 
