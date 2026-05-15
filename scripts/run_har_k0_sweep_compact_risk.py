@@ -244,7 +244,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tau-conflict", type=float, default=0.0)
     p.add_argument("--margin-mode", choices=["adaptive_all", "nearest_competitor"], default="adaptive_all")
     p.add_argument("--audit-mode", choices=["full", "counter_only"], default="full")
-    p.add_argument("--partition-mode", choices=["time_only", "time_channel", "channel_time"], default="time_only")
+    p.add_argument(
+        "--partition-mode",
+        choices=["time_only", "time_channel", "channel_time", "sensor_group_time"],
+        default="time_only",
+    )
     p.add_argument("--out", default="./outputs_composite/har_k0_sweep_compact_risk_q8_q16.csv")
     return p.parse_args()
 

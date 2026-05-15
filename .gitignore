@@ -12,6 +12,8 @@ venv_cuda/
 # Data and artifacts
 data/
 outputs*/
+*.log
+pamap2+physical+activity+monitoring.zip
 
 # OS/editor
 .DS_Store

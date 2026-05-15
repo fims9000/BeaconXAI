@@ -143,5 +143,40 @@ def make_initial_partition_time(t_steps: int, channels: int, k0: int) -> list[Co
     return leaves
 
 
+def make_initial_partition_sensor_group_time(
+    t_steps: int,
+    channels: int,
+    k0: int,
+    group_size: int = 3,
+) -> list[Component]:
+    if k0 < 1:
+        raise ValueError("k0 must be >= 1")
+    group_size = max(1, int(group_size))
+    groups: list[Component] = []
+    gid = 0
+    for c0 in range(0, channels, group_size):
+        c1 = min(channels, c0 + group_size)
+        groups.append(Component(cid=f"g{gid}", t0=0, t1=t_steps, c0=c0, c1=c1))
+        gid += 1
+    leaves = groups[:]
+    heap: list[_HeapItem] = []
+    seq = 0
+    for comp in leaves:
+        heapq.heappush(heap, _HeapItem(-(comp.t1 - comp.t0), seq, comp))
+        seq += 1
+    while len(leaves) < k0 and heap:
+        item = heapq.heappop(heap)
+        comp = item.comp
+        children = split_component_time(comp)
+        if not children:
+            continue
+        leaves.remove(comp)
+        leaves.extend(children)
+        for child in children:
+            heapq.heappush(heap, _HeapItem(-(child.t1 - child.t0), seq, child))
+            seq += 1
+    return leaves
+
+
 def components_cost(components: Iterable[Component], total_points: int) -> float:
     return sum(c.n_points for c in components) / float(total_points)

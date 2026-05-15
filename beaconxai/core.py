@@ -10,6 +10,7 @@ from .neutralization import Neutralizer
 from .partition import (
     components_cost,
     make_initial_partition,
+    make_initial_partition_sensor_group_time,
     make_initial_partition_time,
     split_component,
     split_component_time,
@@ -287,10 +288,12 @@ class BeaconAudit:
     def _make_partition(self, t_steps: int, channels: int, k0: int) -> list[Component]:
         if self.cfg.partition_mode == "time_only":
             return make_initial_partition_time(t_steps, channels, k0)
+        if self.cfg.partition_mode == "sensor_group_time":
+            return make_initial_partition_sensor_group_time(t_steps, channels, k0, group_size=3)
         return make_initial_partition(t_steps, channels, k0)
 
     def _split(self, comp: Component) -> list[Component]:
-        if self.cfg.partition_mode == "time_only":
+        if self.cfg.partition_mode in ("time_only", "sensor_group_time"):
             return split_component_time(comp)
         return split_component(comp)
 
