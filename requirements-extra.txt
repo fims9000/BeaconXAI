@@ -4,3 +4,4 @@ xgboost>=2.0
 shap>=0.45
 lime>=0.2.0.1
 torch>=2.2
+pytest>=8.0

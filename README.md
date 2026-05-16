@@ -14,10 +14,20 @@ The main target is multichannel time series, with additional tabular pilots.
 
 ## Environment
 
+Conda:
+
+```bash
+conda env create -f environment.yml
+conda activate beaconxai
+```
+
+Pip/venv:
+
 ```bash
 python -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/pip install -r requirements-extra.txt
+.venv/bin/pip install -e .
 ```
 
 ## Reproduce Main Paper Blocks
@@ -92,6 +102,14 @@ make all
 .venv/bin/python scripts/run_all.py
 ```
 
+`make all` requires locally prepared datasets. Run `DATA_PREPARATION.md` first.
+
+## Quick Smoke Check
+
+```bash
+make smoke
+```
+
 ## Final Aggregated Results File
 
 Primary one-file summary for manuscript work:
@@ -101,11 +119,22 @@ Primary one-file summary for manuscript work:
 
 ## Reproducibility Notes
 
-- Default random seed is typically `42` (see each script).
+- All reported experiments use seed `42` unless otherwise stated.
 - Compare methods together with `model calls`, not only ranking metrics.
 - In low-dimensional tabular settings, uniform occlusion can be near-exhaustive at moderate budgets.
 - For portability profiling, CPU-affinity/nice constraints are supported; fixed frequency may require root/system support.
 - Data preparation steps are documented in `DATA_PREPARATION.md`.
+- End-to-end reproduction flow is documented in `REPRODUCIBILITY.md`.
+- Manuscript should cite a fixed code tag (e.g., `v1.0-submission`), not moving `main`.
+
+## Submission Artifacts
+
+Reference result artifacts can be attached as a GitHub Release bundle:
+
+- `v1.0-submission-artifacts.zip`
+
+Recommended contents: `table8_significance.csv`, `edge_resource_budget_table.csv`,
+final manuscript tables, and a short `reproduction_log.txt`.
 
 ## Sanity Check
 

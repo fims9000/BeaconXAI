@@ -1,9 +1,13 @@
 PY ?= .venv/bin/python
 
-.PHONY: sanity data-har data-pamap2 data-wisdm hidden-conflict portability significance resource-budget all
+.PHONY: sanity smoke data-har data-pamap2 data-wisdm hidden-conflict portability significance resource-budget all
 
 sanity:
 	$(PY) -m py_compile beaconxai/*.py scripts/*.py tests/*.py
+
+smoke: sanity
+	$(PY) -m pytest tests -q
+	$(PY) -c "import beaconxai; print('beaconxai import ok')"
 
 data-har:
 	$(PY) scripts/make_uci_har_shifted_npz.py --dataset-root data --out data/uci_har_shifted.npz
@@ -34,3 +38,4 @@ significance:
 
 all: hidden-conflict portability resource-budget significance
 	@echo "Done. See outputs_composite/ for generated artifacts."
+	@echo "make all requires locally prepared datasets (see DATA_PREPARATION.md)."

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "beaconxai"
+version = "1.0.0"
+description = "Budgeted local audit for model decisions"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.25",
+  "scikit-learn>=1.4",
+  "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+full = [
+  "matplotlib>=3.8",
+  "xgboost>=2.0",
+  "shap>=0.45",
+  "lime>=0.2.0.1",
+  "torch>=2.2",
+]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+include = ["beaconxai*"]
+
