@@ -155,6 +155,30 @@ def main() -> None:
         pd.concat([pd.read_csv(p) for p in anomaly_boot], ignore_index=True).to_csv(base / "sensor_anomaly_bootstrap.csv", index=False)
 
     claims = []
+    qboot_path = base / "beacon_uniform_q_sweep_bootstrap.csv"
+    if qboot_path.exists():
+        qb = pd.read_csv(qboot_path)
+        metrics = [
+            ("delta_auroc_beacon_minus_uniform", "p_auroc", "ci_auroc_low", "ci_auroc_high"),
+            ("delta_auprc_beacon_minus_uniform", "p_auprc", "ci_auprc_low", "ci_auprc_high"),
+            ("delta_f1_10_beacon_minus_uniform", "p_f1_10", "ci_f1_10_low", "ci_f1_10_high"),
+            ("delta_f1_20_beacon_minus_uniform", "p_f1_20", "ci_f1_20_low", "ci_f1_20_high"),
+        ]
+        for _, r in qb.iterrows():
+            for dcol, pcol, lcol, hcol in metrics:
+                claims.append(
+                    {
+                        "block": "q_sweep_detection",
+                        "bundle": f"{r.get('neutralizer_input', r.get('neutralizer_mode', 'na'))}_q{int(r['q_max'])}",
+                        "criterion": f"BEACON > uniform on {dcol}",
+                        "delta": float(r[dcol]),
+                        "ci_low": float(r[lcol]),
+                        "ci_high": float(r[hcol]),
+                        "p_value": float(r[pcol]),
+                        "q1_signal": int(float(r[lcol]) > 0.0 and float(r[pcol]) < 0.05),
+                    }
+                )
+
     boot_path = base / "bootstrap_deltas_v6.csv"
     if boot_path.exists():
         b = pd.read_csv(boot_path)
@@ -193,6 +217,17 @@ def main() -> None:
             )
     if claims:
         pd.DataFrame(claims).to_csv(base / "manuscript_claim_registry_v6.csv", index=False)
+
+    aliases = {
+        "beacon_uniform_q_sweep.csv": "manuscript_table_detection_v6.csv",
+        "sensor_anomaly_localization.csv": "manuscript_table_sensor_anomaly_v6.csv",
+        "sensor_anomaly_bootstrap.csv": "manuscript_table_sensor_anomaly_bootstrap_v6.csv",
+        "tinyxai_full_audit_cost.csv": "manuscript_table_tiny_full_cost.csv",
+    }
+    for src_name, dst_name in aliases.items():
+        src = base / src_name
+        if src.exists():
+            src.replace(base / dst_name) if False else pd.read_csv(src).to_csv(base / dst_name, index=False)
 
     print(f"saved grid outputs to: {base}")
 

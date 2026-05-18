@@ -92,3 +92,12 @@ ECE:
 Правило принятия:
 > Вторая статья начинает тянуть на самостоятельную Q1-заявку только если в `manuscript_claim_registry_v6.csv` появляется хотя бы один сильный сигнал: `q1_signal=1` для BEACON против uniform в Q-sweep или для BEACON против `variance/profile_distance` в sensor-anomaly benchmark.
 
+Текущий v6 результат:
+- Q-sweep: сильный сигнал найден для `interp, Q=64`.
+  - ΔAUROC = +0.0111, 95% CI [0.0049; 0.0179], p=0.002
+  - ΔAUPRC = +0.0677, 95% CI [0.0098; 0.1234], p=0.016
+  - ΔF1@10 = +0.0841, 95% CI [0.0100; 0.1461], p=0.026
+- Sensor anomaly: сильного сигнала против `variance`, `energy`, `profile_distance` нет; эти простые baseline в текущем synthetic-fault блоке лучше BEACON.
+
+Как писать:
+> In the v6 Q-sweep, BEACON with interpolation neutralization and Q=64 significantly improves AUROC, AUPRC, and F1@10 over uniform occlusion. However, in the synthetic sensor-fault benchmark, simple zero-query statistics remain stronger than BEACON; therefore the anomaly block is reported as a boundary condition rather than as the main positive claim.
