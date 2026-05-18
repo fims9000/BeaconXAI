@@ -295,7 +295,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--conflict-ratio", type=float, default=0.5)
     p.add_argument("--q-values", default="8,16")
     p.add_argument("--neutralizer", choices=["zero", "mean", "interp"], default="zero")
-    p.add_argument("--partition-mode", choices=["time_only", "sensor_group_time"], default="sensor_group_time")
+    p.add_argument(
+        "--partition-mode",
+        choices=["time_only", "time_channel", "channel_time", "sensor_group_time", "fuzzy_chunks"],
+        default="sensor_group_time",
+    )
     p.add_argument("--group-mode", choices=["auto", "pamap3", "per_channel", "split2"], default="auto")
     p.add_argument("--bootstrap", type=int, default=1000)
     p.add_argument("--paired-bootstrap", type=int, default=2000)

@@ -83,10 +83,26 @@ All commands below write artifacts to `outputs_composite/`.
 ### 5) Audit panel tables
 
 ```bash
-.venv/bin/python scripts/make_audit_panel_tables.py --n-boot 1000
+.venv/bin/python scripts/make_audit_panel_tables.py --n-boot 1000 --tan-bins 6
 ```
 
-Now includes `fuzzy_panel` policy in `outputs_composite/audit_panel_vs_scalar.csv`.
+This step now exports alert-policy comparison with four modes:
+`scalar`, `panel` (logit), `fuzzy_policy`, `tan_policy`.
+It also exports bootstrap deltas for policy-vs-policy checks:
+`outputs_composite/audit_policy_deltas.csv`.
+
+### 5.1) One-command final policy/statistics rerun
+
+```bash
+./scripts/run_full_experiments.sh --bootstrap 1000 --tan-bins 6
+```
+
+This script regenerates:
+- `outputs_composite/audit_panel_vs_scalar.csv`
+- `outputs_composite/audit_policy_deltas.csv`
+- `outputs_composite/audit_beacon_vs_uniform.csv`
+- `outputs_composite/table8_significance.csv`
+- `outputs_composite/edge_resource_budget_table.csv`
 
 ### 6) Hidden-conflict significance (paired bootstrap)
 
@@ -155,6 +171,12 @@ Primary one-file summary for manuscript work:
 ## Reproducibility Notes
 
 - All reported experiments use seed `42` unless otherwise stated.
+- Supported partition modes:
+  - `time_only` (time-first 1D chunks),
+  - `time_channel` (balanced 2D chunks),
+  - `channel_time` (channel-first chunks),
+  - `sensor_group_time` (sensor-group chunks over time),
+  - `fuzzy_chunks` (alias of `sensor_group_time` for manuscript wording).
 - Compare methods together with `model calls`, not only ranking metrics.
 - In low-dimensional tabular settings, uniform occlusion can be near-exhaustive at moderate budgets.
 - For portability profiling, CPU-affinity/nice constraints are supported; fixed frequency may require root/system support.

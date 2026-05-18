@@ -201,7 +201,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--val-frac", type=float, default=0.2)
     p.add_argument("--q-max", type=int, default=16)
     p.add_argument("--k0", type=int, default=8)
-    p.add_argument("--partition-mode", default="time_only", choices=["time_only", "sensor_group_time"])
+    p.add_argument(
+        "--partition-mode",
+        default="time_only",
+        choices=["time_only", "time_channel", "channel_time", "sensor_group_time", "fuzzy_chunks"],
+    )
     p.add_argument("--neutralizer", default="zero", choices=["zero", "mean", "interp"])
     p.add_argument("--cnn-epochs", type=int, default=8)
     p.add_argument("--cnn-batch-size", type=int, default=256)

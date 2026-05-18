@@ -33,3 +33,24 @@ def test_budget_and_outputs():
     assert r.rho_b >= 1
     assert 0.0 <= r.risk_b <= 1.0
     assert isinstance(r.censored, bool)
+
+
+def test_channel_time_partition_splits_channels_first():
+    x = np.ones((4, 4), dtype=np.float64)
+    def logits_any(z: np.ndarray) -> np.ndarray:
+        s = float(z.sum())
+        return np.array([s, -s], dtype=np.float64)
+    cfg = BeaconConfig(
+        q_max=2,
+        k0=2,
+        l_min=2,
+        k_pos=2,
+        k_neg=2,
+        q_frag_ratio=0.25,
+        partition_mode="channel_time",
+    )
+    r = BeaconAudit(model_logits=logits_any, neutralizer=Neutralizer("zero"), config=cfg).audit(x)
+    leaves = r.metadata["leaf_components"]
+    assert len(leaves) == 2
+    # (cid, t0, t1, c0, c1): channel-first means full time range for both leaves.
+    assert all(t0 == 0 and t1 == 4 for _, t0, t1, _, _ in leaves)

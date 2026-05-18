@@ -3,7 +3,13 @@ from __future__ import annotations
 import numpy as np
 
 from .neutralization import Neutralizer
-from .partition import components_cost, make_initial_partition, make_initial_partition_time
+from .partition import (
+    components_cost,
+    make_initial_partition,
+    make_initial_partition_channel_time,
+    make_initial_partition_sensor_group_time,
+    make_initial_partition_time,
+)
 from .types import Component
 from .core import BeaconAudit
 from .types import BaseScores, BeaconConfig, LogitFn
@@ -313,6 +319,10 @@ def _risk_from_scores(
 def _make_partition_from_cfg(x: np.ndarray, cfg: BeaconConfig) -> list[Component]:
     if cfg.partition_mode == "time_only":
         return make_initial_partition_time(x.shape[0], x.shape[1], cfg.k0)
+    if cfg.partition_mode == "channel_time":
+        return make_initial_partition_channel_time(x.shape[0], x.shape[1], cfg.k0)
+    if cfg.partition_mode in ("sensor_group_time", "fuzzy_chunks"):
+        return make_initial_partition_sensor_group_time(x.shape[0], x.shape[1], cfg.k0, group_size=3)
     return make_initial_partition(x.shape[0], x.shape[1], cfg.k0)
 
 

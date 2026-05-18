@@ -61,7 +61,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--beta-values", default="0.25,0.5,0.75")
     p.add_argument("--gamma-values", default="0.5,1.0")
     p.add_argument("--tau-s-values", default="0.05,0.10,0.20")
-    p.add_argument("--partition-modes", default="time_only,time_channel")
+    p.add_argument("--partition-modes", default="time_only,time_channel,channel_time,sensor_group_time")
     p.add_argument("--risk-policies", default="rho_only,rho_censored_boost")
 
     p.add_argument("--neutralization", choices=["zero", "mean", "interp"], default="zero")

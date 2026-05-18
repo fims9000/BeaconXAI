@@ -465,7 +465,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--audit-mode", choices=["full", "counter_only"], default="full")
     p.add_argument(
         "--partition-mode",
-        choices=["time_only", "time_channel", "channel_time", "sensor_group_time"],
+        choices=["time_only", "time_channel", "channel_time", "sensor_group_time", "fuzzy_chunks"],
         default="time_only",
     )
     p.add_argument("--out", required=True)

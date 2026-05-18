@@ -38,11 +38,20 @@ make all
 
 ## 5) Regenerate key manuscript artifacts
 
+Primary final rerun command:
+
+```bash
+./scripts/run_full_experiments.sh --bootstrap 1000 --tan-bins 6
+```
+
 - Hidden-conflict table: `outputs_composite/har_hidden_conflict_localization_table.csv`
 - Significance table: `outputs_composite/table8_significance.csv`
 - TAN hidden-conflict detection table: `outputs_composite/har_hidden_conflict_detection_tan_table.csv`
 - Portability profile: `outputs_composite/edge_portability_profile.csv`
 - Resource budget: `outputs_composite/edge_resource_budget_table.csv`
+- Policy table: `outputs_composite/audit_panel_vs_scalar.csv`
+- Policy deltas: `outputs_composite/audit_policy_deltas.csv`
+- BEACON-vs-uniform: `outputs_composite/audit_beacon_vs_uniform.csv`
 - Unified summary: `outputs_composite/article_results_all_in_one.md`
 
 ## 6) Frozen submission version
@@ -50,4 +59,3 @@ make all
 For manuscript citation use tag:
 
 - `v1.0-submission`
-
