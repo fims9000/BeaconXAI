@@ -34,6 +34,97 @@ from sklearn.preprocessing import StandardScaler
 RNG = np.random.default_rng(42)
 
 
+def _trimf(x: np.ndarray, a: float, b: float, c: float) -> np.ndarray:
+    if b <= a:
+        b = a + 1e-12
+    if c <= b:
+        c = b + 1e-12
+    y = np.zeros_like(x, dtype=float)
+    left = (x >= a) & (x <= b)
+    right = (x >= b) & (x <= c)
+    y[left] = (x[left] - a) / (b - a)
+    y[right] = (c - x[right]) / (c - b)
+    y[x == b] = 1.0
+    return np.clip(y, 0.0, 1.0)
+
+
+def _trapmf(x: np.ndarray, a: float, b: float, c: float, d: float) -> np.ndarray:
+    if b < a:
+        b = a
+    if c < b:
+        c = b
+    if d < c:
+        d = c
+    y = np.zeros_like(x, dtype=float)
+    if b > a:
+        up = (x >= a) & (x < b)
+        y[up] = (x[up] - a) / (b - a)
+    core = (x >= b) & (x <= c)
+    y[core] = 1.0
+    if d > c:
+        down = (x > c) & (x <= d)
+        y[down] = (d - x[down]) / (d - c)
+    return np.clip(y, 0.0, 1.0)
+
+
+def _fuzzy_memberships(values: np.ndarray) -> dict[str, np.ndarray]:
+    q10, q25, q50, q75, q90 = np.quantile(values, [0.10, 0.25, 0.50, 0.75, 0.90])
+    vmin = float(np.min(values))
+    vmax = float(np.max(values))
+    span = max(vmax - vmin, 1e-6)
+    lo = vmin - 0.05 * span
+    hi = vmax + 0.05 * span
+    return {
+        "low": _trapmf(values, lo, lo, q25, q50),
+        "med": _trimf(values, q10, q50, q90),
+        "high": _trapmf(values, q50, q75, hi, hi),
+    }
+
+
+def make_fuzzy_panel_score(df: pd.DataFrame) -> np.ndarray:
+    # Conflict/fragility are aggregated panel axes; margin is direct scalar uncertainty.
+    conf = (
+        _z(df["M_B_minus"].to_numpy(dtype=float))
+        + _z(df["CE_B"].to_numpy(dtype=float))
+        + _z(df["r_B_minus"].to_numpy(dtype=float))
+    ) / 3.0
+    frag = (_z(df["rho_B_cost"].to_numpy(dtype=float)) + _z(df["frag_drop"].to_numpy(dtype=float))) / 2.0
+    mneg = df["m_neg"].to_numpy(dtype=float)
+
+    mu_conf = _fuzzy_memberships(conf)
+    mu_frag = _fuzzy_memberships(frag)
+    mu_margin = _fuzzy_memberships(mneg)
+
+    u = np.linspace(0.0, 1.0, 201)
+    risk_terms = {
+        "low": _trapmf(u, 0.0, 0.0, 0.20, 0.40),
+        "med": _trimf(u, 0.25, 0.50, 0.72),
+        "high": _trimf(u, 0.60, 0.78, 0.92),
+        "critical": _trapmf(u, 0.85, 0.95, 1.0, 1.0),
+    }
+
+    out = np.zeros(len(df), dtype=float)
+    for i in range(len(df)):
+        # Rules reflect the paper narrative: conflict x fragility x margin interactions.
+        r_med_1 = min(mu_conf["high"][i], mu_frag["low"][i])  # check sensor conflict
+        r_high_1 = min(mu_conf["low"][i], mu_frag["high"][i])  # repeat measurement
+        r_crit = min(mu_conf["high"][i], mu_frag["high"][i], mu_margin["high"][i])  # escalate
+        r_high_2 = min(mu_conf["med"][i], mu_frag["med"][i], mu_margin["high"][i])
+        r_low = min(mu_conf["low"][i], mu_frag["low"][i], mu_margin["low"][i])  # accept
+        r_high_3 = min(mu_conf["high"][i], mu_frag["low"][i], mu_margin["high"][i])
+        r_med_2 = min(mu_conf["med"][i], mu_margin["low"][i])
+
+        agg = np.zeros_like(u, dtype=float)
+        agg = np.maximum(agg, np.minimum(r_low, risk_terms["low"]))
+        agg = np.maximum(agg, np.minimum(max(r_med_1, r_med_2), risk_terms["med"]))
+        agg = np.maximum(agg, np.minimum(max(r_high_1, r_high_2, r_high_3), risk_terms["high"]))
+        agg = np.maximum(agg, np.minimum(r_crit, risk_terms["critical"]))
+
+        den = float(np.sum(agg))
+        out[i] = float(np.sum(u * agg) / den) if den > 1e-12 else 0.0
+    return out
+
+
 def p_at_fraction(y_true: np.ndarray, score: np.ndarray, frac: float = 0.10) -> float:
     n = len(y_true)
     if n == 0:
@@ -295,6 +386,7 @@ def make_panel_vs_scalar_table(df: pd.DataFrame, out_csv: Path, n_boot: int) -> 
     mneg = df["m_neg"].to_numpy(dtype=float)
     panel_feats = ["m_neg", "M_B_minus", "CE_B", "r_B_minus", "rho_B_cost", "frag_drop"]
     panel_score = cv_logit_scores(df[panel_feats].to_numpy(dtype=float), y)
+    fuzzy_score = make_fuzzy_panel_score(df)
 
     budgets = [0.10, 0.20]
     rows = []
@@ -303,6 +395,7 @@ def make_panel_vs_scalar_table(df: pd.DataFrame, out_csv: Path, n_boot: int) -> 
         for policy, score, params in [
             ("scalar", mneg, "threshold=top_budget_by_m_neg"),
             ("panel", panel_score, "logit(conflict+fragility)_top_budget"),
+            ("fuzzy_panel", fuzzy_score, "mamdani(conflict,fragility,margin)_top_budget"),
         ]:
             prec, rec, f1 = evaluate_alert_policy(y, score, b)
             auprc = float(average_precision_score(y, score))

@@ -19,6 +19,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--skip-portability", action="store_true")
     p.add_argument("--skip-significance", action="store_true")
     p.add_argument("--skip-resource-budget", action="store_true")
+    p.add_argument("--run-tan-detection", action="store_true")
+    p.add_argument("--run-audit-panel", action="store_true")
     p.add_argument("--n-profile", type=int, default=200)
     p.add_argument("--warmup", type=int, default=10)
     return p.parse_args()
@@ -54,6 +56,28 @@ def main() -> None:
             ]
         )
 
+    if args.run_tan_detection:
+        run(
+            [
+                py,
+                "scripts/run_har_hidden_conflict_tan.py",
+                "--out-summary",
+                "outputs_composite/har_hidden_conflict_detection_tan_table.csv",
+                "--out-per-sample",
+                "outputs_composite/har_hidden_conflict_detection_tan_per_sample.csv",
+            ]
+        )
+
+    if args.run_audit_panel:
+        run(
+            [
+                py,
+                "scripts/make_audit_panel_tables.py",
+                "--n-boot",
+                "1000",
+            ]
+        )
+
     if not args.skip_portability:
         run(
             [
@@ -84,6 +108,11 @@ def main() -> None:
     print("Artifacts:")
     print("- outputs_composite/har_hidden_conflict_localization_table.csv")
     print("- outputs_composite/table8_significance.csv")
+    if args.run_tan_detection:
+        print("- outputs_composite/har_hidden_conflict_detection_tan_table.csv")
+        print("- outputs_composite/har_hidden_conflict_detection_tan_per_sample.csv")
+    if args.run_audit_panel:
+        print("- outputs_composite/audit_panel_vs_scalar.csv")
     print("- outputs_composite/edge_portability_profile.csv")
     print("- outputs_composite/edge_resource_budget_table.csv")
 

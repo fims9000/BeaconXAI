@@ -7,7 +7,7 @@ import numpy as np
 
 from .types import Array, Component
 
-NeutralizationMode = Literal["zero", "mean", "interp"]
+NeutralizationMode = Literal["zero", "mean", "interp", "class_mean"]
 
 
 @dataclass
@@ -16,7 +16,7 @@ class Neutralizer:
     channel_means: Array | None = None
 
     def __post_init__(self) -> None:
-        if self.mode == "mean" and self.channel_means is None:
+        if self.mode in ("mean", "class_mean") and self.channel_means is None:
             raise ValueError("channel_means required for mode='mean'")
 
     def __call__(self, x: Array, components: Iterable[Component]) -> Array:
@@ -30,7 +30,7 @@ class Neutralizer:
             z[comp.t0 : comp.t1, comp.c0 : comp.c1] = 0.0
             return
 
-        if self.mode == "mean":
+        if self.mode in ("mean", "class_mean"):
             means = self.channel_means[comp.c0 : comp.c1]
             z[comp.t0 : comp.t1, comp.c0 : comp.c1] = means
             return

@@ -40,6 +40,7 @@ make all
 
 - Hidden-conflict table: `outputs_composite/har_hidden_conflict_localization_table.csv`
 - Significance table: `outputs_composite/table8_significance.csv`
+- TAN hidden-conflict detection table: `outputs_composite/har_hidden_conflict_detection_tan_table.csv`
 - Portability profile: `outputs_composite/edge_portability_profile.csv`
 - Resource budget: `outputs_composite/edge_resource_budget_table.csv`
 - Unified summary: `outputs_composite/article_results_all_in_one.md`

@@ -1,6 +1,6 @@
 PY ?= .venv/bin/python
 
-.PHONY: sanity smoke data-har data-pamap2 data-wisdm hidden-conflict portability significance resource-budget all
+.PHONY: sanity smoke data-har data-pamap2 data-wisdm hidden-conflict tan-detection audit-panel portability significance resource-budget all
 
 sanity:
 	$(PY) -m py_compile beaconxai/*.py scripts/*.py tests/*.py
@@ -22,6 +22,14 @@ hidden-conflict:
 	$(PY) scripts/run_har_hidden_conflict_benchmark.py \
 		--out-summary outputs_composite/har_hidden_conflict_localization_table.csv \
 		--out-per-sample outputs_composite/har_hidden_conflict_localization_per_sample.csv
+
+tan-detection:
+	$(PY) scripts/run_har_hidden_conflict_tan.py \
+		--out-summary outputs_composite/har_hidden_conflict_detection_tan_table.csv \
+		--out-per-sample outputs_composite/har_hidden_conflict_detection_tan_per_sample.csv
+
+audit-panel:
+	$(PY) scripts/make_audit_panel_tables.py --n-boot 1000
 
 portability:
 	$(PY) scripts/measure_portability.py --out outputs_composite/edge_portability_profile.csv

@@ -86,6 +86,8 @@ All commands below write artifacts to `outputs_composite/`.
 .venv/bin/python scripts/make_audit_panel_tables.py --n-boot 1000
 ```
 
+Now includes `fuzzy_panel` policy in `outputs_composite/audit_panel_vs_scalar.csv`.
+
 ### 6) Hidden-conflict significance (paired bootstrap)
 
 ```bash
@@ -94,7 +96,15 @@ All commands below write artifacts to `outputs_composite/`.
   --out outputs_composite/table8_significance.csv
 ```
 
-### 7) One-command paper rerun
+### 7) Hidden-conflict detection with TAN (new)
+
+```bash
+.venv/bin/python scripts/run_har_hidden_conflict_tan.py \
+  --out-summary outputs_composite/har_hidden_conflict_detection_tan_table.csv \
+  --out-per-sample outputs_composite/har_hidden_conflict_detection_tan_per_sample.csv
+```
+
+### 8) One-command paper rerun
 
 ```bash
 make all
@@ -103,6 +113,31 @@ make all
 ```
 
 `make all` requires locally prepared datasets. Run `DATA_PREPARATION.md` first.
+Optional new blocks:
+- `--run-tan-detection` (hidden-conflict detection with TAN)
+- `--run-audit-panel` (includes fuzzy-panel policy table)
+
+### 9) Extended Part2 pipeline (BEACON features -> TAN/fuzzy/fuzzy-gate)
+
+```bash
+.venv/bin/python scripts/run_part2_extended.py \
+  --dataset data/uci_har_shifted.npz \
+  --n-total 5000 \
+  --q-max 16 \
+  --seed 42 \
+  --out outputs_composite/part2_extended
+```
+
+Main artifacts:
+- `audit_features_beacon_core.csv`
+- `audit_features_uniform.csv`
+- `tan_sweep_results.csv`
+- `tan_final_test.csv`
+- `fuzzy_policy_results.csv`
+- `fuzzy_final_test.csv`
+- `policy_comparison.csv`
+- `bootstrap_deltas.csv`
+- `split_manifest.json`
 
 ## Quick Smoke Check
 
