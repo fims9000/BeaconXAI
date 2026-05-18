@@ -115,6 +115,11 @@ def _inject_fault(
     seg = y[t0:t1, c]
     if fault_type == "channel_dropout":
         y[t0:t1, c] = 0.0
+    elif fault_type == "dropout":
+        y[t0:t1, c] = 0.0
+    elif fault_type == "stuck_sensor":
+        fill = float(y[t0 - 1, c]) if t0 > 0 else float(np.mean(y[:, c]))
+        y[t0:t1, c] = fill
     elif fault_type == "spike":
         tt = int(rng.integers(t0, t1))
         s = float(np.std(y[:, c]) + 1e-6)
@@ -122,6 +127,10 @@ def _inject_fault(
     elif fault_type == "scale_drift":
         scale = float(rng.uniform(1.6, 2.6))
         y[t0:t1, c] = seg * scale
+    elif fault_type == "drift":
+        s = float(np.std(y[:, c]) + 1e-6)
+        ramp = np.linspace(0.0, float(rng.choice([-1.0, 1.0])) * 2.0 * s, t1 - t0)
+        y[t0:t1, c] = seg + ramp
     elif fault_type == "additive_noise":
         s = float(np.std(y[:, c]) + 1e-6)
         y[t0:t1, c] = seg + rng.normal(0.0, 0.8 * s, size=(t1 - t0))
@@ -148,10 +157,58 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cnn-batch-size", type=int, default=256)
     p.add_argument("--cnn-lr", type=float, default=1e-3)
     p.add_argument("--beacon-score-mode", choices=["neg_only", "abs_delta"], default="neg_only")
+    p.add_argument("--fault-types", default="spike,drift,stuck_sensor,dropout")
+    p.add_argument("--n-boot", type=int, default=1000)
     p.add_argument("--out-summary", default="outputs_composite/har_sensor_fault_localization_table.csv")
     p.add_argument("--out-per-sample", default="outputs_composite/har_sensor_fault_localization_per_sample.csv")
+    p.add_argument("--out-bootstrap", default="outputs_composite/har_sensor_fault_bootstrap.csv")
     p.add_argument("--out-eval-npz", default="outputs_composite/har_sensor_fault_eval.npz")
     return p.parse_args()
+
+
+def _component_reference_stats(x_train: np.ndarray, t_slices: list[tuple[int, int]]) -> tuple[np.ndarray, np.ndarray]:
+    n_channels = x_train.shape[2]
+    n_components = n_channels * len(t_slices)
+    means = np.zeros((n_components, 3), dtype=np.float64)
+    stds = np.ones((n_components, 3), dtype=np.float64)
+    vals_by_comp: list[list[list[float]]] = [[] for _ in range(n_components)]
+    for xi in x_train:
+        for c in range(n_channels):
+            for b, (tt0, tt1) in enumerate(t_slices):
+                v = xi[tt0:tt1, c]
+                cid = _component_idx(c, b, len(t_slices))
+                vals_by_comp[cid].append([float(np.mean(v)), float(np.var(v)), float(np.mean(v * v))])
+    for cid, vals in enumerate(vals_by_comp):
+        arr = np.asarray(vals, dtype=np.float64)
+        means[cid] = np.mean(arr, axis=0)
+        stds[cid] = np.std(arr, axis=0) + 1e-6
+    return means, stds
+
+
+def _bootstrap_method_delta(per_rows: list[dict], method_a: str, method_b: str, metric: str, n_boot: int, seed: int) -> dict:
+    by_method: dict[str, dict[int, float]] = {}
+    for r in per_rows:
+        by_method.setdefault(str(r["method"]), {})[int(r["sample_index_eval"])] = float(r[metric])
+    common = sorted(set(by_method.get(method_a, {})) & set(by_method.get(method_b, {})))
+    rng = np.random.default_rng(seed)
+    vals = []
+    for _ in range(n_boot):
+        idx = rng.choice(common, size=len(common), replace=True)
+        va = np.mean([by_method[method_a][int(i)] for i in idx])
+        vb = np.mean([by_method[method_b][int(i)] for i in idx])
+        vals.append(float(va - vb))
+    arr = np.asarray(vals, dtype=np.float64)
+    p = 2.0 * min(float(np.mean(arr <= 0.0)), float(np.mean(arr >= 0.0)))
+    return {
+        "method_a": method_a,
+        "method_b": method_b,
+        "metric": metric,
+        "delta": float(np.mean(arr)),
+        "ci_low": float(np.quantile(arr, 0.025)),
+        "ci_high": float(np.quantile(arr, 0.975)),
+        "p_value": float(min(1.0, max(0.0, p))),
+        "n": int(len(common)),
+    }
 
 
 def main() -> None:
@@ -202,7 +259,9 @@ def main() -> None:
     x_eval = x_test.copy()
     true_comp = -np.ones(n, dtype=np.int64)
     fault_type_arr = np.array(["none"] * n, dtype=object)
-    faults = ["channel_dropout", "spike", "scale_drift", "additive_noise", "temporal_shift"]
+    faults = [v.strip() for v in args.fault_types.split(",") if v.strip()]
+    if not faults:
+        raise ValueError("--fault-types must contain at least one fault")
 
     for i in fault_idx:
         c = int(rng.integers(0, n_channels))
@@ -259,9 +318,11 @@ def main() -> None:
     lat_uniform = float((time.time() - t0) / max(1, len(idx_fault)))
 
     # Zero-query baselines
+    ref_mean, ref_std = _component_reference_stats(x_train, t_slices)
     scores_amp = np.zeros((len(idx_fault), n_components), dtype=np.float64)
     scores_energy = np.zeros((len(idx_fault), n_components), dtype=np.float64)
     scores_var = np.zeros((len(idx_fault), n_components), dtype=np.float64)
+    scores_profile = np.zeros((len(idx_fault), n_components), dtype=np.float64)
     scores_rand = rng.random((len(idx_fault), n_components))
 
     for j, i in enumerate(idx_fault):
@@ -273,12 +334,17 @@ def main() -> None:
                 scores_amp[j, cid] = float(np.mean(np.abs(v)))
                 scores_energy[j, cid] = float(np.mean(v * v))
                 scores_var[j, cid] = float(np.var(v))
+                desc = np.asarray([float(np.mean(v)), float(np.var(v)), float(np.mean(v * v))])
+                ref = ref_mean[cid]
+                sd = ref_std[cid]
+                scores_profile[j, cid] = float(np.mean(np.abs((desc - ref) / sd)))
 
     methods = {
         "random": (scores_rand, 0.0, 0.0),
         "amplitude_heuristic": (scores_amp, 0.0, 0.0),
         "energy_heuristic": (scores_energy, 0.0, 0.0),
         "variance_heuristic": (scores_var, 0.0, 0.0),
+        "profile_distance": (scores_profile, 0.0, 0.0),
         "uniform_occlusion": (scores_uniform, float(args.q), lat_uniform),
         "beacon_xai": (scores_beacon, float(np.mean(q_used_beacon)), lat_beacon),
     }
@@ -334,6 +400,25 @@ def main() -> None:
         wr.writeheader()
         wr.writerows(per_rows)
 
+    boot_rows = []
+    for baseline in ["uniform_occlusion", "variance_heuristic", "energy_heuristic", "profile_distance"]:
+        for metric in ["is_correct", "hit3", "hit5"]:
+            boot_rows.append(
+                _bootstrap_method_delta(
+                    per_rows,
+                    method_a="beacon_xai",
+                    method_b=baseline,
+                    metric=metric,
+                    n_boot=args.n_boot,
+                    seed=args.seed + abs(hash((baseline, metric))) % 100000,
+                )
+            )
+    out_boot = Path(args.out_bootstrap)
+    with out_boot.open("w", newline="", encoding="utf-8") as f:
+        wr = csv.DictWriter(f, fieldnames=list(boot_rows[0].keys()))
+        wr.writeheader()
+        wr.writerows(boot_rows)
+
     np.savez_compressed(
         args.out_eval_npz,
         x_eval=x_eval,
@@ -346,6 +431,7 @@ def main() -> None:
 
     print(f"saved: {out_summary}")
     print(f"saved: {out_per}")
+    print(f"saved: {out_boot}")
     print(f"saved: {args.out_eval_npz}")
 
 

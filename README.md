@@ -191,6 +191,48 @@ Optional new blocks:
 - `--run-tan-detection` (hidden-conflict detection with TAN)
 - `--run-audit-panel` (includes fuzzy-panel policy table)
 
+### 12) v6 Q1 candidate package
+
+This block is the strict Q1 gate: it runs Q-sweep, fuzzy_v5/soft-mix policies,
+sensor anomaly localization, simple baselines, full-audit cost, and a claim registry.
+
+Fast smoke:
+
+```bash
+.venv/bin/python scripts/run_v6_experiments.py \
+  --skip-policy-grid \
+  --q-list 4 \
+  --anomaly-model extratrees \
+  --anomaly-max-test 32 \
+  --n-boot 20 \
+  --base-out outputs_composite/part2_extended_v6_smoke
+```
+
+Full v6 candidate:
+
+```bash
+/home/lebedeffson/Code/deep-neuro-fuzzy/.venv/bin/python scripts/run_v6_experiments.py \
+  --dataset data/uci_har_shifted.npz \
+  --model cnn1d \
+  --device cuda \
+  --q-list 16,32,64 \
+  --neutralizers interp,zero,mean,class_mean \
+  --n-total 5000 \
+  --anomaly-model cnn1d \
+  --anomaly-max-test 512 \
+  --anomaly-fault-types spike,drift,stuck_sensor,dropout \
+  --n-boot 1000 \
+  --base-out outputs_composite/part2_extended_v6
+```
+
+Main v6 artifacts:
+- `beacon_vs_uniform_q_sweep.csv`
+- `bootstrap_deltas_v6.csv`
+- `sensor_anomaly_localization.csv`
+- `sensor_anomaly_bootstrap.csv`
+- `tinyxai_full_audit_cost.csv`
+- `manuscript_claim_registry_v6.csv`
+
 ## Quick Smoke Check
 
 ```bash

@@ -76,3 +76,19 @@ ECE:
 3. Не заявлять, что BEACON лучше uniform в бинарной детекции в текущем HAR-блоке.  
 4. Не путать process-level RSS baseline с инкрементальной памятью метода.
 
+## 6) v6 Q1-gate
+
+Для Q1-версии используем отдельный пакет:
+`outputs_composite/part2_extended_v6/`.
+
+Каноничные v6-файлы:
+- `beacon_vs_uniform_q_sweep.csv`
+- `bootstrap_deltas_v6.csv`
+- `sensor_anomaly_localization.csv`
+- `sensor_anomaly_bootstrap.csv`
+- `tinyxai_full_audit_cost.csv`
+- `manuscript_claim_registry_v6.csv`
+
+Правило принятия:
+> Вторая статья начинает тянуть на самостоятельную Q1-заявку только если в `manuscript_claim_registry_v6.csv` появляется хотя бы один сильный сигнал: `q1_signal=1` для BEACON против uniform в Q-sweep или для BEACON против `variance/profile_distance` в sensor-anomaly benchmark.
+

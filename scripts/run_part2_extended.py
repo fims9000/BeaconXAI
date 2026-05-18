@@ -217,7 +217,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--hidden-max-tries", type=int, default=20)
     p.add_argument("--tan-bins", default="3,4,5,6")
     p.add_argument("--tan-alpha", default="0.1,0.5,1.0,2.0")
-    p.add_argument("--neutralizer-mode", choices=["interp", "zero", "channel_mean", "class_mean"], default="interp")
+    p.add_argument("--neutralizer-mode", choices=["interp", "zero", "mean", "channel_mean", "class_mean"], default="interp")
     p.add_argument("--features-only", action="store_true")
     p.add_argument("--out", default="outputs_composite/part2_extended")
     return p.parse_args()

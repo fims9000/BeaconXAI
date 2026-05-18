@@ -13,10 +13,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--model", default="extratrees", choices=["extratrees", "histgbt", "cnn1d"])
     p.add_argument("--n-total", type=int, default=3000)
     p.add_argument("--q-list", default="16,32,64")
-    p.add_argument("--neutralizers", default="interp,zero,channel_mean")
+    p.add_argument("--neutralizers", default="interp,zero,mean,class_mean")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--base-out", default="outputs_composite/part2_extended_v6")
     p.add_argument("--skip-feature-run", action="store_true")
+    p.add_argument("--skip-policy-grid", action="store_true")
+    p.add_argument("--skip-anomaly", action="store_true")
+    p.add_argument("--anomaly-model", default="cnn1d", choices=["extratrees", "histgbt", "cnn1d"])
+    p.add_argument("--anomaly-max-test", type=int, default=512)
+    p.add_argument("--anomaly-fault-types", default="spike,drift,stuck_sensor,dropout")
+    p.add_argument("--n-boot", type=int, default=1000)
     p.add_argument("--device", default="cpu")
     return p.parse_args()
 
@@ -34,44 +40,78 @@ def main() -> None:
     base = Path(args.base_out)
     base.mkdir(parents=True, exist_ok=True)
 
-    for q in q_list:
-        for mode in modes:
-            bdir = base / f"q{q}_{mode}"
-            bdir.mkdir(parents=True, exist_ok=True)
+    if not args.skip_policy_grid:
+        for q in q_list:
+            for mode in modes:
+                bdir = base / f"q{q}_{mode}"
+                bdir.mkdir(parents=True, exist_ok=True)
 
-            if not args.skip_feature_run:
+                if not args.skip_feature_run:
+                    _run(
+                        [
+                            sys.executable,
+                            "scripts/run_part2_extended.py",
+                            "--dataset",
+                            args.dataset,
+                            "--model",
+                            args.model,
+                            "--n-total",
+                            str(args.n_total),
+                            "--q-max",
+                            str(q),
+                            "--neutralizer-mode",
+                            mode,
+                            "--seed",
+                            str(args.seed),
+                            "--features-only",
+                            "--out",
+                            str(bdir),
+                        ]
+                    )
+
                 _run(
                     [
                         sys.executable,
-                        "scripts/run_part2_extended.py",
-                        "--dataset",
-                        args.dataset,
-                        "--model",
-                        args.model,
-                        "--n-total",
-                        str(args.n_total),
-                        "--q-max",
-                        str(q),
-                        "--neutralizer-mode",
-                        mode,
+                        "scripts/evaluate_v6_policies.py",
+                        "--bundle-dir",
+                        str(bdir),
                         "--seed",
                         str(args.seed),
-                        "--features-only",
-                        "--out",
-                        str(bdir),
+                        "--device",
+                        args.device,
+                        "--n-boot",
+                        str(args.n_boot),
                     ]
                 )
 
+    if not args.skip_anomaly:
+        for q in q_list:
+            adir = base / f"anomaly_q{q}"
+            adir.mkdir(parents=True, exist_ok=True)
             _run(
                 [
                     sys.executable,
-                    "scripts/evaluate_v6_policies.py",
-                    "--bundle-dir",
-                    str(bdir),
-                    "--seed",
-                    str(args.seed),
-                    "--device",
-                    args.device,
+                    "scripts/run_har_sensor_fault_benchmark.py",
+                    "--npz-path",
+                    args.dataset,
+                    "--model",
+                    args.anomaly_model,
+                    "--q",
+                    str(q),
+                    "--max-test",
+                    str(args.anomaly_max_test),
+                    "--fault-types",
+                    args.anomaly_fault_types,
+                    "--n-boot",
+                    str(args.n_boot),
+                    "--out-summary",
+                    str(adir / "sensor_anomaly_localization.csv"),
+                    "--out-per-sample",
+                    str(adir / "sensor_anomaly_per_sample.csv"),
+                    "--out-bootstrap",
+                    str(adir / "sensor_anomaly_bootstrap.csv"),
+                    "--out-eval-npz",
+                    str(adir / "sensor_anomaly_eval.npz"),
                 ]
             )
 
@@ -79,6 +119,8 @@ def main() -> None:
     rows = []
     brows = []
     costs = []
+    anomaly = []
+    anomaly_boot = []
     for q in q_list:
         for mode in modes:
             bdir = base / f"q{q}_{mode}"
@@ -91,6 +133,13 @@ def main() -> None:
                 brows.append(pb)
             if pc.exists():
                 costs.append(pc)
+        adir = base / f"anomaly_q{q}"
+        pa = adir / "sensor_anomaly_localization.csv"
+        pab = adir / "sensor_anomaly_bootstrap.csv"
+        if pa.exists():
+            anomaly.append(pa)
+        if pab.exists():
+            anomaly_boot.append(pab)
 
     import pandas as pd
 
@@ -100,6 +149,50 @@ def main() -> None:
         pd.concat([pd.read_csv(p) for p in brows], ignore_index=True).to_csv(base / "bootstrap_deltas_v6.csv", index=False)
     if costs:
         pd.concat([pd.read_csv(p) for p in costs], ignore_index=True).to_csv(base / "tinyxai_full_audit_cost.csv", index=False)
+    if anomaly:
+        pd.concat([pd.read_csv(p) for p in anomaly], ignore_index=True).to_csv(base / "sensor_anomaly_localization.csv", index=False)
+    if anomaly_boot:
+        pd.concat([pd.read_csv(p) for p in anomaly_boot], ignore_index=True).to_csv(base / "sensor_anomaly_bootstrap.csv", index=False)
+
+    claims = []
+    boot_path = base / "bootstrap_deltas_v6.csv"
+    if boot_path.exists():
+        b = pd.read_csv(boot_path)
+        m = b[
+            (b["comparison"] == "logit_beacon_vs_uniform")
+            & (b["metric"].isin(["delta_auroc", "delta_auprc", "delta_f1_10", "delta_f1_20"]))
+        ]
+        for _, r in m.iterrows():
+            claims.append(
+                {
+                    "block": "binary_detection",
+                    "bundle": r.get("bundle", ""),
+                    "criterion": f"BEACON > uniform on {r['metric']}",
+                    "delta": float(r["delta"]),
+                    "ci_low": float(r["ci_low"]),
+                    "ci_high": float(r["ci_high"]),
+                    "p_value": float(r["p_value"]),
+                    "q1_signal": int(float(r["ci_low"]) > 0.0 and float(r["p_value"]) < 0.05),
+                }
+            )
+    aboot_path = base / "sensor_anomaly_bootstrap.csv"
+    if aboot_path.exists():
+        ab = pd.read_csv(aboot_path)
+        for _, r in ab.iterrows():
+            claims.append(
+                {
+                    "block": "sensor_anomaly",
+                    "bundle": "",
+                    "criterion": f"beacon_xai > {r['method_b']} on {r['metric']}",
+                    "delta": float(r["delta"]),
+                    "ci_low": float(r["ci_low"]),
+                    "ci_high": float(r["ci_high"]),
+                    "p_value": float(r["p_value"]),
+                    "q1_signal": int(float(r["ci_low"]) > 0.0 and float(r["p_value"]) < 0.05),
+                }
+            )
+    if claims:
+        pd.DataFrame(claims).to_csv(base / "manuscript_claim_registry_v6.csv", index=False)
 
     print(f"saved grid outputs to: {base}")
 
