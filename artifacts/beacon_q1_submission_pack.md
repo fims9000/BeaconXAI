@@ -75,9 +75,22 @@ Main observation:
 - At `Q=16`, BEACON beats uniform only on `hit@5`, but this is not enough for the central Q1 claim.
 - At `Q=64`, uniform is better than BEACON on `loc@1`.
 
+Per-scenario localization, `Q=64`, metric `hit@3`:
+
+| Fault scenario | Best comparator | Comparator hit@3 | BEACON hit@3 | Interpretation |
+|---|---:|---:|---:|---|
+| spike | variance_heuristic | 0.7059 | 0.0735 | simple statistic is much stronger |
+| drift | energy_heuristic | 0.1795 | 0.0897 | simple statistic is stronger |
+| stuck_sensor | profile_distance | 0.1273 | 0.0182 | profile baseline is stronger |
+| dropout | uniform_occlusion | 0.0545 | 0.0182 | uniform is stronger; zero-query baselines are weak |
+
 Manuscript wording:
 
 > The sensor-anomaly benchmark is reported as a boundary condition. For direct synthetic faults such as spikes, drift, stuck sensors, and dropout, simple zero-query statistics remain stronger than BEACON. This indicates that BEACON should not be positioned as a universal anomaly detector; its main advantage appears in budgeted counter-evidence/risk-panel detection under interpolation neutralization.
+
+More precise wording for the table:
+
+> On spike, drift, and stuck-sensor faults, zero-query statistics provide stronger localization than BEACON. On dropout, the best comparator is uniform occlusion rather than the zero-query statistics. Therefore, this block is treated as a negative/boundary benchmark.
 
 ## TinyXAI / Full-Audit Cost Claim
 
@@ -89,9 +102,29 @@ Core facts:
 - The diagnostic policy layer occupies only a tiny share of runtime.
 - The reported profile is constrained CPU edge execution, not MCU deployment.
 
+Measured rows are available for `Q=8` and `Q=16`. The positive v6 claim uses `Q=64`, so the article should report this as an extrapolated envelope, not a direct measurement.
+
+Q64 cost envelope from measured inference:
+
+| Mode | Basis | Approx. p50 |
+|---|---:|---:|
+| model-call lower bound | `65 * 2.897 ms` | 188.3 ms |
+| core-style envelope | `65 * 2.897 ms + ~18.1 ms extraction` | 206.4 ms |
+| conservative linear scaling from Q16 core | `66.9 ms * 64/16` | 267.6 ms |
+
 Manuscript wording:
 
 > The policy layer is lightweight, but the full BEACON audit is not free: its cost is dominated by repeated model calls. We therefore report the full audit envelope separately from the policy-layer footprint and avoid claiming microcontroller deployment.
+
+Q64 wording:
+
+> The strongest v6 configuration uses `Q=64`. Since full-audit latency is dominated by `(Q+1)` model calls, this configuration should be interpreted as a more expensive offline or near-edge audit mode. Based on the measured single-forward latency, the Q64 lower-bound envelope is about 188 ms, with a core-style estimate around 206 ms and a conservative linear upper envelope around 268 ms.
+
+## Neutralizer Choice
+
+Manuscript wording:
+
+> The Q-sweep evaluates interpolation, zero, channel-mean, and class-mean neutralization. A statistically supported improvement over uniform occlusion is observed only for interpolation at `Q=64`. Therefore, the main positive claim is stated for this configuration rather than for BEACON under all neutralizers.
 
 ## Claims Allowed
 
@@ -120,4 +153,3 @@ Title direction:
 Story:
 
 > BEACON is a budgeted local audit method for time-series classifiers. It improves early risk-panel detection over uniform occlusion when enough query budget is available (`Q=64`) and interpolation neutralization is used. Compact policies (linear, fuzzy, TAN) convert BEACON-derived audit vectors into operational alert scores. The fuzzy and TAN policies provide interpretable/probabilistic alternatives to the linear panel. The sensor-anomaly benchmark shows the boundary of the approach: simple statistics remain stronger for direct synthetic faults, so BEACON should be positioned as a counter-evidence audit method rather than a universal anomaly detector.
-

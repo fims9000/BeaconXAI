@@ -99,5 +99,20 @@ ECE:
   - ΔF1@10 = +0.0841, 95% CI [0.0100; 0.1461], p=0.026
 - Sensor anomaly: сильного сигнала против `variance`, `energy`, `profile_distance` нет; эти простые baseline в текущем synthetic-fault блоке лучше BEACON.
 
+Sensor anomaly, `Q=64`, metric `hit@3`:
+- spike: best comparator `variance_heuristic` = 0.7059, BEACON = 0.0735
+- drift: best comparator `energy_heuristic` = 0.1795, BEACON = 0.0897
+- stuck_sensor: best comparator `profile_distance` = 0.1273, BEACON = 0.0182
+- dropout: best comparator `uniform_occlusion` = 0.0545, BEACON = 0.0182
+
+Q64 cost envelope:
+- measured rows exist for Q=8 and Q=16;
+- model-call lower bound for Q=64: about 188 ms (`65 * 2.897 ms`);
+- core-style estimate: about 206 ms;
+- conservative linear upper envelope from Q16 core: about 268 ms.
+
+Neutralizer note:
+> Проверялись `interp`, `zero`, `mean/channel_mean` и `class_mean`; статистически подтверждённый выигрыш над uniform получен только для `interp, Q=64`. Поэтому основной claim формулируется именно для этой конфигурации.
+
 Как писать:
 > In the v6 Q-sweep, BEACON with interpolation neutralization and Q=64 significantly improves AUROC, AUPRC, and F1@10 over uniform occlusion. However, in the synthetic sensor-fault benchmark, simple zero-query statistics remain stronger than BEACON; therefore the anomaly block is reported as a boundary condition rather than as the main positive claim.
