@@ -86,6 +86,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--n-boot", type=int, default=500)
     p.add_argument("--out-summary", default="outputs_composite/beacon_uniform_q_sweep.csv")
     p.add_argument("--out-bootstrap", default="outputs_composite/beacon_uniform_q_sweep_bootstrap.csv")
+    p.add_argument("--out-per-sample", default="", help="optional csv with per-sample panel scores")
     return p.parse_args()
 
 
@@ -144,6 +145,7 @@ def main() -> None:
 
     summary_rows = []
     boot_rows = []
+    per_sample_rows = []
 
     for nz_raw, nz_mode in neutralizers:
         ch_means = np.zeros(x_train.shape[-1], dtype=np.float32)
@@ -178,6 +180,21 @@ def main() -> None:
             xu = np.column_stack([m[f"{f}_u"].to_numpy(dtype=float) for f in feats])
             sb = cv_logit_scores(xb, y, seed=args.seed)
             su = cv_logit_scores(xu, y, seed=args.seed)
+            sample_ids = m["sample_id"].to_numpy(dtype=int)
+
+            if args.out_per_sample:
+                for sid, yy, sbe, sun in zip(sample_ids, y, sb, su):
+                    per_sample_rows.append(
+                        {
+                            "sample_id": int(sid),
+                            "label": int(yy),
+                            "neutralizer_input": nz_raw,
+                            "neutralizer_mode": nz_mode,
+                            "q_max": int(q),
+                            "score_beacon_panel": float(sbe),
+                            "score_uniform_panel": float(sun),
+                        }
+                    )
 
             f1b10 = evaluate_alert_policy(y, sb, 0.10)[2]
             f1u10 = evaluate_alert_policy(y, su, 0.10)[2]
@@ -248,6 +265,11 @@ def main() -> None:
     out_summary.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(summary_rows).to_csv(out_summary, index=False)
     pd.DataFrame(boot_rows).to_csv(out_boot, index=False)
+    if args.out_per_sample:
+        out_ps = Path(args.out_per_sample)
+        out_ps.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(per_sample_rows).to_csv(out_ps, index=False)
+        print(f"saved: {out_ps}")
     print(f"saved: {out_summary}")
     print(f"saved: {out_boot}")
 

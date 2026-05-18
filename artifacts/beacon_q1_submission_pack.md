@@ -9,9 +9,11 @@ This file is the canonical source for manuscript claims after the v6 experiments
 - `outputs_composite/part2_extended_v6/sensor_anomaly_localization.csv`
 - `outputs_composite/part2_extended_v6/sensor_anomaly_bootstrap.csv`
 - `outputs_composite/part2_extended_v6/manuscript_claim_registry_v6.csv`
+- `outputs_composite/part2_extended_v6/table2_q64_metric_ci.csv`
 - `outputs_composite/audit_panel_vs_scalar.csv`
 - `outputs_composite/audit_policy_deltas.csv`
 - `outputs_composite/tinyxai_full_audit_cost.csv`
+- `outputs_composite/edge_resource_budget_q64_profile.csv`
 
 ## Main Positive Claim
 
@@ -94,7 +96,7 @@ More precise wording for the table:
 
 ## TinyXAI / Full-Audit Cost Claim
 
-Source: `outputs_composite/tinyxai_full_audit_cost.csv`.
+Source: `outputs_composite/tinyxai_full_audit_cost.csv` and `outputs_composite/edge_resource_budget_q64_profile.csv`.
 
 Core facts:
 
@@ -102,15 +104,23 @@ Core facts:
 - The diagnostic policy layer occupies only a tiny share of runtime.
 - The reported profile is constrained CPU edge execution, not MCU deployment.
 
-Measured rows are available for `Q=8` and `Q=16`. The positive v6 claim uses `Q=64`, so the article should report this as an extrapolated envelope, not a direct measurement.
+Direct constrained-CPU measurement is now available for `Q=64` (`beacon_core_q64`).
 
-Q64 cost envelope from measured inference:
+Measured core latency:
+
+| Mode | Measured p50 | Measured p95 | mean model calls |
+|---|---:|---:|---:|
+| core q16 | 16.40 ms | 22.05 ms | 16.84 |
+| core q32 | 29.01 ms | 36.09 ms | 31.51 |
+| core q64 | 55.08 ms | 64.23 ms | 60.43 |
+
+Q64 envelope (kept as conservative context):
 
 | Mode | Basis | Approx. p50 |
 |---|---:|---:|
 | model-call lower bound | `65 * 2.897 ms` | 188.3 ms |
 | core-style envelope | `65 * 2.897 ms + ~18.1 ms extraction` | 206.4 ms |
-| conservative linear scaling from Q16 core | `66.9 ms * 64/16` | 267.6 ms |
+| conservative linear scaling from old low-frequency profile | `66.9 ms * 64/16` | 267.6 ms |
 
 Manuscript wording:
 
@@ -118,7 +128,7 @@ Manuscript wording:
 
 Q64 wording:
 
-> The strongest v6 configuration uses `Q=64`. Since full-audit latency is dominated by `(Q+1)` model calls, this configuration should be interpreted as a more expensive offline or near-edge audit mode. Based on the measured single-forward latency, the Q64 lower-bound envelope is about 188 ms, with a core-style estimate around 206 ms and a conservative linear upper envelope around 268 ms.
+> The strongest v6 configuration uses `Q=64`. Direct constrained-CPU profiling shows `beacon_core_q64` p50 around 55 ms (p95 around 64 ms) with about 60 model calls on average. This is still a more expensive mode than low-Q settings and should be interpreted as an offline or near-edge audit option.
 
 ## Neutralizer Choice
 

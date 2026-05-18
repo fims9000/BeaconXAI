@@ -99,6 +99,9 @@ ECE:
   - ΔF1@10 = +0.0841, 95% CI [0.0100; 0.1461], p=0.026
 - Sensor anomaly: сильного сигнала против `variance`, `energy`, `profile_distance` нет; эти простые baseline в текущем synthetic-fault блоке лучше BEACON.
 
+CI для абсолютных метрик (`interp, Q=64`) вынесены в:
+`outputs_composite/part2_extended_v6/table2_q64_metric_ci.csv`.
+
 Sensor anomaly, `Q=64`, metric `hit@3`:
 - spike: best comparator `variance_heuristic` = 0.7059, BEACON = 0.0735
 - drift: best comparator `energy_heuristic` = 0.1795, BEACON = 0.0897
@@ -106,7 +109,8 @@ Sensor anomaly, `Q=64`, metric `hit@3`:
 - dropout: best comparator `uniform_occlusion` = 0.0545, BEACON = 0.0182
 
 Q64 cost envelope:
-- measured rows exist for Q=8 and Q=16;
+- direct constrained-CPU rows now exist for core Q=16/32/64 (`edge_resource_budget_q64_profile.csv`);
+- core_q64 measured: p50=55.08 ms, p95=64.23 ms, mean_model_calls=60.43;
 - model-call lower bound for Q=64: about 188 ms (`65 * 2.897 ms`);
 - core-style estimate: about 206 ms;
 - conservative linear upper envelope from Q16 core: about 268 ms.

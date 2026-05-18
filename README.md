@@ -22,6 +22,8 @@ Use only these files as the final manuscript source:
 - `outputs_composite/audit_beacon_vs_uniform.csv`
 - `outputs_composite/edge_resource_budget_table.csv`
 - `outputs_composite/tinyxai_full_audit_cost.csv`
+- `outputs_composite/part2_extended_v6/table2_q64_metric_ci.csv`
+- `outputs_composite/edge_resource_budget_q64_profile.csv`
 - `artifacts/beacon_article_insert_pack_ru.md`
 - `artifacts/beacon_q1_submission_pack.md`
 
