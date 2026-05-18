@@ -23,6 +23,7 @@ Use only these files as the final manuscript source:
 - `outputs_composite/edge_resource_budget_table.csv`
 - `outputs_composite/tinyxai_full_audit_cost.csv`
 - `artifacts/beacon_article_insert_pack_ru.md`
+- `artifacts/beacon_q1_submission_pack.md`
 
 Everything else in `outputs_composite/` should be treated as exploratory or archived runs.
 
