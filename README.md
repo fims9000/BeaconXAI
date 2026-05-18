@@ -12,6 +12,20 @@ The main target is multichannel time series, with additional tabular pilots.
 
 `data/` and `outputs*/` are local-only (gitignored).
 
+## Canonical Paper Artifacts (use these for claims)
+
+Use only these files as the final manuscript source:
+
+- `outputs_composite/table8_significance.csv`
+- `outputs_composite/audit_panel_vs_scalar.csv`
+- `outputs_composite/audit_policy_deltas.csv`
+- `outputs_composite/audit_beacon_vs_uniform.csv`
+- `outputs_composite/edge_resource_budget_table.csv`
+- `outputs_composite/tinyxai_full_audit_cost.csv`
+- `artifacts/beacon_article_insert_pack_ru.md`
+
+Everything else in `outputs_composite/` should be treated as exploratory or archived runs.
+
 ## Environment
 
 Conda:
