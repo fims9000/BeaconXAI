@@ -9,9 +9,22 @@ from sklearn.cluster import KMeans
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
+try:
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import DataLoader, TensorDataset
+
+    TORCH_AVAILABLE = True
+except ModuleNotFoundError:
+    torch = None
+    DataLoader = None
+    TensorDataset = None
+    TORCH_AVAILABLE = False
+
+    class _NNStub:
+        Module = object
+
+    nn = _NNStub()
 
 
 @dataclass
@@ -488,6 +501,9 @@ def train_1dcnn(
     use_class_weights: bool = True,
     tta_shifts: tuple[int, ...] = (0,),
 ):
+    if not TORCH_AVAILABLE:
+        raise ModuleNotFoundError("train_1dcnn requires 'torch'. Install optional dependency: pip install torch")
+
     torch.manual_seed(seed)
     np.random.seed(seed)
 

@@ -120,18 +120,18 @@ This script regenerates:
   --out-per-sample outputs_composite/har_hidden_conflict_detection_tan_per_sample.csv
 ```
 
-### 8) One-command paper rerun
+### 8) Q-sweep: BEACON vs uniform (detection panel)
 
 ```bash
-make all
-# or
-.venv/bin/python scripts/run_all.py
+.venv/bin/python scripts/run_beacon_uniform_q_sweep.py \
+  --q-values 16,32,64 \
+  --neutralizers interp,zero,channel_mean,train_class_mean \
+  --n-boot 500 \
+  --out-summary outputs_composite/beacon_uniform_q_sweep.csv \
+  --out-bootstrap outputs_composite/beacon_uniform_q_sweep_bootstrap.csv
 ```
 
-`make all` requires locally prepared datasets. Run `DATA_PREPARATION.md` first.
-Optional new blocks:
-- `--run-tan-detection` (hidden-conflict detection with TAN)
-- `--run-audit-panel` (includes fuzzy-panel policy table)
+`channel_mean -> mean` and `train_class_mean -> class_mean` are accepted aliases.
 
 ### 9) Extended Part2 pipeline (BEACON features -> TAN/fuzzy/fuzzy-gate)
 
@@ -154,6 +154,28 @@ Main artifacts:
 - `policy_comparison.csv`
 - `bootstrap_deltas.csv`
 - `split_manifest.json`
+
+### 10) Full-audit cost envelope (TinyXAI section)
+
+```bash
+.venv/bin/python scripts/estimate_full_audit_cost.py \
+  --profile-csv outputs_composite/edge_portability_profile.csv \
+  --resource-csv outputs_composite/edge_resource_budget_table.csv \
+  --out outputs_composite/tinyxai_full_audit_cost.csv
+```
+
+### 11) One-command paper rerun
+
+```bash
+make all
+# or
+.venv/bin/python scripts/run_all.py
+```
+
+`make all` requires locally prepared datasets. Run `DATA_PREPARATION.md` first.
+Optional new blocks:
+- `--run-tan-detection` (hidden-conflict detection with TAN)
+- `--run-audit-panel` (includes fuzzy-panel policy table)
 
 ## Quick Smoke Check
 
