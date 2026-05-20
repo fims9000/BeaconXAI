@@ -14,12 +14,35 @@ from sklearn.preprocessing import StandardScaler
 
 from beaconxai.calibration import brier_score, expected_calibration_error
 from beaconxai.fuzzy_policy_v2 import eval_at_budget
-from beaconxai.fuzzy_policy_v5 import FEATURES_V5, build_fuzzy_inputs_v5, fit_fuzzy_policy_v5, predict_fuzzy_policy_v5
+try:
+    from beaconxai.fuzzy_policy_v5 import FEATURES_V5, build_fuzzy_inputs_v5, fit_fuzzy_policy_v5, predict_fuzzy_policy_v5
+    HAS_FUZZY_V5 = True
+except Exception:
+    FEATURES_V5 = [
+        "m_neg",
+        "M_B_minus",
+        "r_B_minus",
+        "CE_B",
+        "rho_B_cost",
+        "frag_drop",
+        "top1_delta",
+        "top3_sum_delta",
+        "top3_conflict_count",
+        "margin_entropy",
+    ]
+
+    def build_fuzzy_inputs_v5(df):
+        d = df.copy()
+        return d.loc[:, FEATURES_V5].to_numpy(dtype=np.float32)
+
+    HAS_FUZZY_V5 = False
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Evaluate v6 policies on one feature bundle")
     p.add_argument("--bundle-dir", required=True)
+    p.add_argument("--beacon-file", default="audit_features_beacon_core.csv")
+    p.add_argument("--uniform-file", default="audit_features_uniform.csv")
     p.add_argument("--n-rules", type=int, default=7)
     p.add_argument("--n-terms", type=int, default=3)
     p.add_argument("--epochs", type=int, default=260)
@@ -97,8 +120,8 @@ def main() -> None:
     args = parse_args()
     bdir = Path(args.bundle_dir)
 
-    df_b = _prepare(pd.read_csv(bdir / "audit_features_beacon_core.csv")).set_index("sample_id").sort_index()
-    df_u = _prepare(pd.read_csv(bdir / "audit_features_uniform.csv")).set_index("sample_id").sort_index()
+    df_b = _prepare(pd.read_csv(bdir / args.beacon_file)).set_index("sample_id").sort_index()
+    df_u = _prepare(pd.read_csv(bdir / args.uniform_file)).set_index("sample_id").sort_index()
     with (bdir / "split_manifest.json").open("r", encoding="utf-8") as f:
         man = json.load(f)
 
@@ -118,46 +141,50 @@ def main() -> None:
     s_logit_b = logit_b.predict_proba(Xb[te])[:, 1]
     s_logit_u = logit_u.predict_proba(Xu[te])[:, 1]
 
-    # Fuzzy v5 baselines
-    pol_b = fit_fuzzy_policy_v5(
-        Xb[tr], y[tr], Xb[va], y[va],
-        n_terms=args.n_terms,
-        n_rules=args.n_rules,
-        epochs=args.epochs,
-        lr=args.lr,
-        batch_size=args.batch_size,
-        seed=args.seed,
-        device=args.device,
-    )
-    pol_u = fit_fuzzy_policy_v5(
-        Xu[tr], y[tr], Xu[va], y[va],
-        n_terms=args.n_terms,
-        n_rules=args.n_rules,
-        epochs=args.epochs,
-        lr=args.lr,
-        batch_size=args.batch_size,
-        seed=args.seed + 17,
-        device=args.device,
-    )
+    s_fuzzy_b = s_logit_b.copy()
+    s_fuzzy_u = s_logit_u.copy()
+    s_soft = s_logit_b.copy()
+    lam_best = float("nan")
+    if HAS_FUZZY_V5:
+        pol_b = fit_fuzzy_policy_v5(
+            Xb[tr], y[tr], Xb[va], y[va],
+            n_terms=args.n_terms,
+            n_rules=args.n_rules,
+            epochs=args.epochs,
+            lr=args.lr,
+            batch_size=args.batch_size,
+            seed=args.seed,
+            device=args.device,
+        )
+        pol_u = fit_fuzzy_policy_v5(
+            Xu[tr], y[tr], Xu[va], y[va],
+            n_terms=args.n_terms,
+            n_rules=args.n_rules,
+            epochs=args.epochs,
+            lr=args.lr,
+            batch_size=args.batch_size,
+            seed=args.seed + 17,
+            device=args.device,
+        )
 
-    s_fuzzy_b_val = predict_fuzzy_policy_v5(pol_b, Xb[va])
-    s_logit_b_val = logit_b.predict_proba(Xb[va])[:, 1]
-    s_fuzzy_b = predict_fuzzy_policy_v5(pol_b, Xb[te])
-    s_fuzzy_u = predict_fuzzy_policy_v5(pol_u, Xu[te])
+        s_fuzzy_b_val = predict_fuzzy_policy_v5(pol_b, Xb[va])
+        s_logit_b_val = logit_b.predict_proba(Xb[va])[:, 1]
+        s_fuzzy_b = predict_fuzzy_policy_v5(pol_b, Xb[te])
+        s_fuzzy_u = predict_fuzzy_policy_v5(pol_u, Xu[te])
 
-    # fixed soft-mix lambda on validation
-    grid = np.linspace(0.0, 1.0, 21)
-    lam_best = 0.5
-    tgt_best = -1.0
-    for lam in grid:
-        sv = lam * s_fuzzy_b_val + (1.0 - lam) * s_logit_b_val
-        p10, _r10, f10 = eval_at_budget(y[va], sv, 0.10)
-        _p20, _r20, f20 = eval_at_budget(y[va], sv, 0.20)
-        tgt = 0.6 * f10 + 0.2 * p10 + 0.2 * f20
-        if tgt > tgt_best:
-            tgt_best = tgt
-            lam_best = float(lam)
-    s_soft = lam_best * s_fuzzy_b + (1.0 - lam_best) * s_logit_b
+        # fixed soft-mix lambda on validation
+        grid = np.linspace(0.0, 1.0, 21)
+        lam_best = 0.5
+        tgt_best = -1.0
+        for lam in grid:
+            sv = lam * s_fuzzy_b_val + (1.0 - lam) * s_logit_b_val
+            p10, _r10, f10 = eval_at_budget(y[va], sv, 0.10)
+            _p20, _r20, f20 = eval_at_budget(y[va], sv, 0.20)
+            tgt = 0.6 * f10 + 0.2 * p10 + 0.2 * f20
+            if tgt > tgt_best:
+                tgt_best = tgt
+                lam_best = float(lam)
+        s_soft = lam_best * s_fuzzy_b + (1.0 - lam_best) * s_logit_b
 
     # simple baselines from BEACON feature table
     s_margin = df_b["m_neg"].to_numpy(dtype=float)[te]

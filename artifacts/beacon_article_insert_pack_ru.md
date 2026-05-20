@@ -99,6 +99,14 @@ ECE:
   - ΔF1@10 = +0.0841, 95% CI [0.0100; 0.1461], p=0.026
 - Sensor anomaly: сильного сигнала против `variance`, `energy`, `profile_distance` нет; эти простые baseline в текущем synthetic-fault блоке лучше BEACON.
 
+HAR budget context (`M=72`):
+- `Q=16` -> `Q/M=0.2222` (low-budget)
+- `Q=32` -> `Q/M=0.4444` (medium-budget)
+- `Q=64` -> `Q/M=0.8889` (**high-budget / near-full**)
+
+Важно:
+> Сигнал `interp, Q=64` корректно трактовать как результат high-budget audit regime. Его нельзя подавать как строгий ultra-low-budget claim.
+
 CI для абсолютных метрик (`interp, Q=64`) вынесены в:
 `outputs_composite/part2_extended_v6/table2_q64_metric_ci.csv`.
 
@@ -110,13 +118,49 @@ Sensor anomaly, `Q=64`, metric `hit@3`:
 
 Q64 cost envelope:
 - direct constrained-CPU rows now exist for core Q=16/32/64 (`edge_resource_budget_q64_profile.csv`);
-- core_q64 measured: p50=55.08 ms, p95=64.23 ms, mean_model_calls=60.43;
-- model-call lower bound for Q=64: about 188 ms (`65 * 2.897 ms`);
-- core-style estimate: about 206 ms;
-- conservative linear upper envelope from Q16 core: about 268 ms.
+- `edge_resource_budget_q64_profile.csv` (same-profile measurement):
+  - inference_only p50 = 0.757 ms;
+  - core_q64 measured: p50=55.08 ms, p95=64.23 ms, mean_model_calls=60.43;
+  - same-profile lower bound: `60.43 * 0.757 ≈ 45.8 ms` (consistent with measured ~55 ms).
+- `tinyxai_full_audit_cost.csv` (separate simulation-based split):
+  - uses inference baseline `2.897 ms` and gives conservative envelope:
+  - model-call lower bound for Q=64: about 188 ms (`65 * 2.897 ms`);
+  - core-style estimate: about 206 ms;
+  - conservative linear upper envelope from Q16 core: about 268 ms.
+
+Правило для статьи:
+> Не смешивать в одной таблице числа из `edge_resource_budget_q64_profile.csv` и `tinyxai_full_audit_cost.csv` как будто это один и тот же runtime setup. Это два разных профиля (measured vs simulation-based envelope).
 
 Neutralizer note:
 > Проверялись `interp`, `zero`, `mean/channel_mean` и `class_mean`; статистически подтверждённый выигрыш над uniform получен только для `interp, Q=64`. Поэтому основной claim формулируется именно для этой конфигурации.
 
 Как писать:
-> In the v6 Q-sweep, BEACON with interpolation neutralization and Q=64 significantly improves AUROC, AUPRC, and F1@10 over uniform occlusion. However, in the synthetic sensor-fault benchmark, simple zero-query statistics remain stronger than BEACON; therefore the anomaly block is reported as a boundary condition rather than as the main positive claim.
+> In the v6 Q-sweep, BEACON with interpolation neutralization and Q=64 significantly improves AUROC, AUPRC, and F1@10 over uniform occlusion. In HAR this corresponds to a high-budget regime (Q/M=0.89 for M=72), not an ultra-low-budget setup. However, in the synthetic sensor-fault benchmark, simple zero-query statistics remain stronger than BEACON; therefore the anomaly block is reported as a boundary condition rather than as the main positive claim.
+
+## 6.1) v7 next step (для строгого budget claim)
+
+Минимальный перезапуск без переобучения модели:
+- `time_bins=16` (`M=144`, тогда `Q=64 -> Q/M=0.4444`)
+- `Q=16,32,64`
+- `neutralizer=interp`
+- panel policy = logit
+- bootstrap = 1000
+
+Цель:
+> проверить, сохраняется ли supported-positive сигнал BEACON > uniform при более строгом бюджете (`Q/M <= 0.5`).
+
+## 7) Part1 q-sweep guardrails (обязательно перед апдейтом Part1 текста)
+
+Новые проверочные файлы:
+- `outputs_composite/part1_localization_q_sweep/part1_best_claims_summary.csv`
+- `outputs_composite/part1_localization_q_sweep/part1_allowed_claims.md`
+
+Короткий итог:
+- по `loc@1` подтверждённого универсального сигнала нет;
+- по `PAMAP2` в текущем sweep supported-positive по BEACON>uniform нет;
+- на `WISDM` есть локальные positive-сигналы на отдельных метриках ранжирования (`hit@3`, `hit@5`, `NRG`, `mean_rank`) и отдельных конфигурациях.
+
+Правило для текста Part1:
+1. Нельзя писать «устойчиво превосходит» в общем виде.
+2. Можно писать только конфигурационно-ограниченные claims из `part1_allowed_claims.md`.
+3. Обязательно указать sensitivity к `dataset / neutralizer / Q` и наличие negative cases.

@@ -201,6 +201,73 @@ def _compute_uniform_deltas(
     return deltas, float(m0), rho_cost, frag_drop
 
 
+def _z(x: np.ndarray) -> np.ndarray:
+    x = np.asarray(x, dtype=np.float64)
+    s = float(np.std(x))
+    if s <= 1e-12:
+        return np.zeros_like(x)
+    return (x - float(np.mean(x))) / s
+
+
+def _compute_adaptive_v2_deltas(
+    x: np.ndarray,
+    clf,
+    t_slices: list[tuple[int, int]],
+    q: int,
+    neutralizer_mode: str,
+    channel_means: np.ndarray | None = None,
+) -> tuple[np.ndarray, float, float, float]:
+    n_channels = x.shape[1]
+    n_bins = len(t_slices)
+    n_components = n_channels * n_bins
+    lg0 = clf.logits(x)
+    _y0, m0 = _margin(lg0)
+
+    energy = np.zeros(n_components, dtype=np.float64)
+    variance = np.zeros(n_components, dtype=np.float64)
+    profile_dist = np.zeros(n_components, dtype=np.float64)
+    mean_dev = np.zeros(n_components, dtype=np.float64)
+    for c in range(n_channels):
+        cm = float(channel_means[c]) if channel_means is not None else 0.0
+        for bi, (t0, t1) in enumerate(t_slices):
+            cid = _component_idx(c, bi, n_bins)
+            v = x[t0:t1, c].astype(np.float64)
+            energy[cid] = float(np.mean(v * v))
+            variance[cid] = float(np.var(v))
+            mean_dev[cid] = float(abs(np.mean(v) - cm))
+            profile_dist[cid] = float(np.sqrt(np.mean((v - cm) ** 2)))
+
+    score = _z(energy) + _z(variance) + _z(profile_dist) + _z(mean_dev)
+    order = np.argsort(-score)
+    budget = min(int(q), n_components)
+    cand = order[:budget]
+
+    deltas = np.zeros(n_components, dtype=np.float64)
+    for comp in cand:
+        c, b = _component_decode(int(comp), n_bins)
+        t0, t1 = t_slices[b]
+        xm = _neutralize_component(x, t0, t1, c, neutralizer_mode, channel_means=channel_means)
+        _y1, m1 = _margin(clf.logits(xm))
+        deltas[int(comp)] = float(m0 - m1)
+
+    pos_order = [idx for idx in np.argsort(-deltas) if deltas[idx] > 0]
+    x_cur = x.copy()
+    m_last = float(m0)
+    k_flip = 0
+    for k, comp in enumerate(pos_order, start=1):
+        c, b = _component_decode(int(comp), n_bins)
+        t0, t1 = t_slices[b]
+        x_cur = _neutralize_component(x_cur, t0, t1, c, neutralizer_mode, channel_means=channel_means)
+        _yy, mm = _margin(clf.logits(x_cur))
+        m_last = float(mm)
+        if mm <= 0.0:
+            k_flip = k
+            break
+    rho_cost = float(k_flip / max(n_components, 1)) if k_flip > 0 else 1.0
+    frag_drop = float(max(0.0, m0 - m_last))
+    return deltas, float(m0), rho_cost, frag_drop
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Extended Part2 pipeline: BEACON features + TAN + fuzzy + gates")
     p.add_argument("--dataset", default="data/uci_har_shifted.npz")
@@ -218,7 +285,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tan-bins", default="3,4,5,6")
     p.add_argument("--tan-alpha", default="0.1,0.5,1.0,2.0")
     p.add_argument("--neutralizer-mode", choices=["interp", "zero", "mean", "channel_mean", "class_mean"], default="interp")
+    p.add_argument("--adaptive-v2-preselect", action="store_true")
     p.add_argument("--features-only", action="store_true")
+    p.add_argument("--save-delta-vectors", action="store_true")
     p.add_argument("--out", default="outputs_composite/part2_extended")
     return p.parse_args()
 
@@ -348,6 +417,10 @@ def main() -> None:
 
     rows_beacon = []
     rows_uniform = []
+    rows_adapt = []
+    delta_rows_beacon = []
+    delta_rows_uniform = []
+    delta_rows_adapt = []
     for i in range(len(y_det)):
         x = x_det[i]
         y_lbl = int(y_det[i])
@@ -380,6 +453,18 @@ def main() -> None:
                 deltas=deltas_b,
             )
         )
+        if args.save_delta_vectors:
+            row_db = {
+                "sample_id": int(i),
+                "label": int(y_lbl),
+                "is_hidden_conflict": int(y_lbl),
+                "method": "beacon_core",
+                "q_max": int(args.q_max),
+                "seed": int(args.seed),
+            }
+            for j, v in enumerate(deltas_b.tolist()):
+                row_db[f"d{j:03d}"] = float(v)
+            delta_rows_beacon.append(row_db)
 
         deltas_u, m0_u, rho_u, frag_u = _compute_uniform_deltas(
             x=x,
@@ -405,11 +490,67 @@ def main() -> None:
                 frag_drop=frag_u,
             )
         )
+        if args.save_delta_vectors:
+            row_du = {
+                "sample_id": int(i),
+                "label": int(y_lbl),
+                "is_hidden_conflict": int(y_lbl),
+                "method": "uniform_occlusion",
+                "q_max": int(args.q_max),
+                "seed": int(args.seed),
+            }
+            for j, v in enumerate(deltas_u.tolist()):
+                row_du[f"d{j:03d}"] = float(v)
+            delta_rows_uniform.append(row_du)
+
+        if args.adaptive_v2_preselect:
+            deltas_a, m0_a, rho_a, frag_a = _compute_adaptive_v2_deltas(
+                x=x,
+                clf=clf,
+                t_slices=t_slices,
+                q=args.q_max,
+                neutralizer_mode=args.neutralizer_mode,
+                channel_means=uniform_means,
+            )
+            rows_adapt.append(
+                extract_audit_vector(
+                    beacon_result=None,
+                    margin=m0_a,
+                    q_max=args.q_max,
+                    sample_id=i,
+                    label=y_lbl,
+                    is_hidden_conflict=y_lbl,
+                    method="adaptive_v2_preselect",
+                    seed=args.seed,
+                    deltas=deltas_a,
+                    rho_b_cost=rho_a,
+                    frag_drop=frag_a,
+                )
+            )
+            if args.save_delta_vectors:
+                row_da = {
+                    "sample_id": int(i),
+                    "label": int(y_lbl),
+                    "is_hidden_conflict": int(y_lbl),
+                    "method": "adaptive_v2_preselect",
+                    "q_max": int(args.q_max),
+                    "seed": int(args.seed),
+                }
+                for j, v in enumerate(deltas_a.tolist()):
+                    row_da[f"d{j:03d}"] = float(v)
+                delta_rows_adapt.append(row_da)
 
     df_b = pd.DataFrame(rows_beacon)
     df_u = pd.DataFrame(rows_uniform)
     df_b.to_csv(out_dir / "audit_features_beacon_core.csv", index=False)
     df_u.to_csv(out_dir / "audit_features_uniform.csv", index=False)
+    if rows_adapt:
+        pd.DataFrame(rows_adapt).to_csv(out_dir / "audit_features_adaptive_v2.csv", index=False)
+    if args.save_delta_vectors:
+        pd.DataFrame(delta_rows_beacon).to_csv(out_dir / "delta_vectors_beacon_core.csv", index=False)
+        pd.DataFrame(delta_rows_uniform).to_csv(out_dir / "delta_vectors_uniform.csv", index=False)
+        if delta_rows_adapt:
+            pd.DataFrame(delta_rows_adapt).to_csv(out_dir / "delta_vectors_adaptive_v2.csv", index=False)
 
     manifest = {
         "seed": int(args.seed),

@@ -6,6 +6,51 @@ import numpy as np
 
 
 EPS = 1e-8
+R_CF_MAX = 10.0
+
+
+def _extra_conflict_features(
+    deltas: np.ndarray,
+    margin: float,
+    rho_b_cost: float,
+) -> dict[str, float]:
+    d = np.asarray(deltas, dtype=np.float64).reshape(-1)
+    if d.size == 0:
+        return {
+            "var_conflict": 0.0,
+            "conflict_connectivity": 0.0,
+            "delta_frag_proxy": 0.0,
+            "r_cf": 0.0,
+        }
+
+    # Conflict/support convention:
+    # d < 0 -> conflict (neutralization increases model margin),
+    # d > 0 -> support.
+    conf_mag = -d[d < 0.0]
+    sup_mag = d[d > 0.0]
+    var_conflict = float(np.var(conf_mag)) if conf_mag.size > 1 else 0.0
+
+    conf_mask = d < 0.0
+    conf_cnt = int(np.sum(conf_mask))
+    if conf_cnt <= 1:
+        conflict_connectivity = 0.0
+    else:
+        edge_hits = float(np.sum(conf_mask[1:] & conf_mask[:-1]))
+        conflict_connectivity = float(edge_hits / max(conf_cnt - 1, 1))
+
+    max_support = float(np.max(sup_mag)) if sup_mag.size > 0 else 0.0
+    full_frag_proxy = float(abs(float(margin)) / (max_support + EPS))
+    delta_frag_proxy = float(full_frag_proxy - float(rho_b_cost))
+
+    m_minus = float(np.sum(conf_mag))
+    r_cf = float(m_minus / (float(rho_b_cost) + EPS))
+    r_cf = float(np.clip(r_cf, 0.0, R_CF_MAX))
+    return {
+        "var_conflict": var_conflict,
+        "conflict_connectivity": conflict_connectivity,
+        "delta_frag_proxy": delta_frag_proxy,
+        "r_cf": r_cf,
+    }
 
 
 def summarize_deltas(deltas: np.ndarray, top_k: int = 3) -> dict[str, float]:
@@ -94,6 +139,7 @@ def extract_audit_vector(
     m_neg = float(-margin)
     top = summarize_deltas(deltas_arr)
     m_ent = float(margin_entropy_from_margin(margin) if margin_entropy is None else margin_entropy)
+    extra = _extra_conflict_features(deltas_arr, margin=float(margin), rho_b_cost=float(rho_cost_v))
 
     return {
         "sample_id": int(sample_id),
@@ -113,6 +159,10 @@ def extract_audit_vector(
         "delta_entropy": top["delta_entropy"],
         "rank_entropy": top["rank_entropy"],
         "margin_entropy": m_ent,
+        "var_conflict": extra["var_conflict"],
+        "conflict_connectivity": extra["conflict_connectivity"],
+        "delta_frag_proxy": extra["delta_frag_proxy"],
+        "r_cf": extra["r_cf"],
         "method": str(method),
         "q_max": int(q_max),
         "seed": int(seed),

@@ -325,7 +325,8 @@ class BeaconAudit:
 
     def _delta(self, x: np.ndarray, y_hat: int, m0: float, components: Sequence[Component], competitor: int | None = None) -> float:
         z = self.neutralizer(x, components)
-        return m0 - self._margin(z, y_hat, competitor)
+        raw = m0 - self._margin(z, y_hat, competitor)
+        return self._normalize_delta(raw, m0)
 
     def _delta_switch(
         self,
@@ -346,16 +347,21 @@ class BeaconAudit:
             logits = self.model_logits(x_work)
             x_work[comp.t0 : comp.t1, comp.c0 : comp.c1] = x[comp.t0 : comp.t1, comp.c0 : comp.c1]
             margin = self._margin_from_logits(logits, y_hat, competitor)
-            delta = m0 - margin
+            delta = self._normalize_delta(m0 - margin, m0)
             pred = int(np.argmax(logits))
             return float(delta), int(pred != y_hat)
 
         z = self.neutralizer(x, components)
         logits = self.model_logits(z)
         margin = self._margin_from_logits(logits, y_hat, competitor)
-        delta = m0 - margin
+        delta = self._normalize_delta(m0 - margin, m0)
         pred = int(np.argmax(logits))
         return float(delta), int(pred != y_hat)
+
+    def _normalize_delta(self, delta_raw: float, m0: float) -> float:
+        if not bool(getattr(self.cfg, "normalize_delta", False)):
+            return float(delta_raw)
+        return float(delta_raw / (abs(float(m0)) + float(self.cfg.eps)))
 
     def _apply_component_inplace(self, z: np.ndarray, comp: Component) -> None:
         if self.neutralizer.mode == "zero":

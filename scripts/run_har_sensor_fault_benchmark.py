@@ -163,6 +163,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out-per-sample", default="outputs_composite/har_sensor_fault_localization_per_sample.csv")
     p.add_argument("--out-bootstrap", default="outputs_composite/har_sensor_fault_bootstrap.csv")
     p.add_argument("--out-eval-npz", default="outputs_composite/har_sensor_fault_eval.npz")
+    p.add_argument("--enable-hybrid", action="store_true")
+    p.add_argument("--hybrid-lambda-grid", default="0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0")
     return p.parse_args()
 
 
@@ -348,6 +350,32 @@ def main() -> None:
         "uniform_occlusion": (scores_uniform, float(args.q), lat_uniform),
         "beacon_xai": (scores_beacon, float(np.mean(q_used_beacon)), lat_beacon),
     }
+
+    if args.enable_hybrid:
+        lam_grid = [float(v.strip()) for v in args.hybrid_lambda_grid.split(",") if v.strip()]
+        stat = np.maximum.reduce([scores_var, scores_energy, scores_profile])
+
+        def _norm_rows(a: np.ndarray) -> np.ndarray:
+            b = a.copy()
+            mu = np.mean(b, axis=1, keepdims=True)
+            sd = np.std(b, axis=1, keepdims=True) + 1e-8
+            return (b - mu) / sd
+
+        sb = _norm_rows(scores_beacon)
+        ss = _norm_rows(stat)
+        val_idx = np.arange(len(idx_fault))[::2]
+        best_lam = 0.5
+        best_hit3 = -1.0
+        for lam in lam_grid:
+            sc = (1.0 - lam) * ss[val_idx] + lam * sb[val_idx]
+            rk = _true_ranks(sc, y_true[val_idx])
+            h3 = float(np.mean(rk <= 3))
+            if h3 > best_hit3:
+                best_hit3 = h3
+                best_lam = float(lam)
+
+        scores_hybrid = (1.0 - best_lam) * ss + best_lam * sb
+        methods["hybrid_fault_beacon"] = (scores_hybrid, float(np.mean(q_used_beacon)), lat_beacon)
 
     rows = []
     per_rows = []

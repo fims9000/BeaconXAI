@@ -54,3 +54,22 @@ def test_channel_time_partition_splits_channels_first():
     assert len(leaves) == 2
     # (cid, t0, t1, c0, c1): channel-first means full time range for both leaves.
     assert all(t0 == 0 and t1 == 4 for _, t0, t1, _, _ in leaves)
+
+
+def test_delta_normalization_toggle():
+    x = np.array([[1.0], [1.0]], dtype=np.float64)
+
+    def logits_sum(z: np.ndarray) -> np.ndarray:
+        s = float(np.sum(z))
+        return np.array([s, 0.0], dtype=np.float64)
+
+    cfg_raw = BeaconConfig(q_max=1, k0=1, l_min=8, k_pos=1, k_neg=1, normalize_delta=False)
+    r_raw = BeaconAudit(model_logits=logits_sum, neutralizer=Neutralizer("zero"), config=cfg_raw).audit(x)
+    d_raw = float(r_raw.metadata["leaf_deltas"][0])
+    assert np.isclose(d_raw, r_raw.m0, atol=1e-8)
+
+    cfg_norm = BeaconConfig(q_max=1, k0=1, l_min=8, k_pos=1, k_neg=1, normalize_delta=True)
+    r_norm = BeaconAudit(model_logits=logits_sum, neutralizer=Neutralizer("zero"), config=cfg_norm).audit(x)
+    d_norm = float(r_norm.metadata["leaf_deltas"][0])
+    assert np.isfinite(d_norm)
+    assert np.isclose(d_norm, 1.0, atol=1e-8)

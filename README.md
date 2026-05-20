@@ -236,6 +236,58 @@ Main v6 artifacts:
 - `tinyxai_full_audit_cost.csv`
 - `manuscript_claim_registry_v6.csv`
 
+### 13) v8 Track A runner + embedded policy export
+
+Run v8 grid (time-bins/Q/neutralizer) and aggregate strict artifacts:
+
+```bash
+.venv/bin/python scripts/run_v8_experiments.py \
+  --dataset data/uci_har_shifted.npz \
+  --model extratrees \
+  --time-bins-list 16 \
+  --q-list 16,32,64 \
+  --neutralizers interp \
+  --preselect-mode adaptive_v2 \
+  --n-boot 1000 \
+  --base-out outputs_composite/part2_extended_v8
+```
+
+Main v8 artifacts:
+- `beacon_vs_uniform_q_sweep_v8.csv`
+- `bootstrap_deltas_v8.csv`
+- `har_component_budget_summary_v8.csv`
+- `manuscript_claim_registry_v8.csv`
+
+Improved policy training blocks:
+
+```bash
+.venv/bin/python scripts/train_tan_improved.py \
+  --bundle-dir outputs_composite/part2_extended_v8/tb16_q16_interp
+```
+
+```bash
+.venv/bin/python scripts/train_fuzzy_improved.py \
+  --bundle-dir outputs_composite/part2_extended_v8/tb16_q16_interp
+```
+
+Hybrid sensor-fault benchmark:
+
+```bash
+.venv/bin/python scripts/run_har_sensor_fault_benchmark.py \
+  --npz-path data/uci_har_shifted.npz \
+  --model extratrees \
+  --q 16 \
+  --enable-hybrid
+```
+
+Export policy layer to C++ header (`h(a(x))` only):
+
+```bash
+.venv/bin/python scripts/export_policy_to_cpp.py \
+  --bundle-dir outputs_composite/part2_extended_v8/tb16_q16_interp \
+  --out-header embedded/beacon_policy.h
+```
+
 ## Quick Smoke Check
 
 ```bash

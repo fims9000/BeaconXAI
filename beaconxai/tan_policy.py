@@ -29,21 +29,30 @@ class TANModel:
     n_bins: int = 4
     alpha: float = 1.0
 
-    def fit(self, X: np.ndarray, y: np.ndarray) -> "TANModel":
+    def fit(self, X: np.ndarray, y: np.ndarray, sample_weight: np.ndarray | None = None) -> "TANModel":
         self.classes_ = np.unique(y)
-        if len(self.classes_) != 2:
-            raise ValueError("TANModel expects binary labels")
         self.class_to_idx_ = {int(c): i for i, c in enumerate(self.classes_)}
 
         n, d = X.shape
         self.d_ = d
         Xd = X.astype(np.int64)
         c_idx = np.array([self.class_to_idx_[int(v)] for v in y], dtype=np.int64)
+        if sample_weight is None:
+            sw = np.ones(n, dtype=np.float64)
+        else:
+            sw = np.asarray(sample_weight, dtype=np.float64).reshape(-1)
+            if sw.shape[0] != n:
+                raise ValueError("sample_weight length mismatch")
+            sw = np.maximum(sw, 0.0)
+        total_w = float(np.sum(sw))
+        if total_w <= 0.0:
+            sw = np.ones(n, dtype=np.float64)
+            total_w = float(n)
 
         w = np.zeros((d, d), dtype=np.float64)
         for i in range(d):
             for j in range(i + 1, d):
-                v = self._conditional_mi(Xd[:, i], Xd[:, j], c_idx)
+                v = self._conditional_mi(Xd[:, i], Xd[:, j], c_idx, sw)
                 w[i, j] = w[j, i] = v
 
         self.parent_ = self._max_spanning_tree_parents(w)
@@ -51,8 +60,8 @@ class TANModel:
         n_classes = len(self.classes_)
         self.log_prior_ = np.zeros(n_classes, dtype=np.float64)
         for c in range(n_classes):
-            nc = int(np.sum(c_idx == c))
-            self.log_prior_[c] = np.log((nc + self.alpha) / (n + self.alpha * n_classes))
+            wc = float(np.sum(sw[c_idx == c]))
+            self.log_prior_[c] = np.log((wc + self.alpha) / (total_w + self.alpha * n_classes))
 
         self.root_tables_ = {}
         self.cond_tables_ = {}
@@ -62,7 +71,7 @@ class TANModel:
                 tab = np.zeros((n_classes, self.n_bins), dtype=np.float64)
                 for c in range(n_classes):
                     mask = c_idx == c
-                    cnt = np.bincount(Xd[mask, i], minlength=self.n_bins).astype(np.float64)
+                    cnt = np.bincount(Xd[mask, i], weights=sw[mask], minlength=self.n_bins).astype(np.float64)
                     tab[c] = np.log((cnt + self.alpha) / (np.sum(cnt) + self.alpha * self.n_bins))
                 self.root_tables_[i] = tab
             else:
@@ -71,7 +80,7 @@ class TANModel:
                     mask_c = c_idx == c
                     for pv in range(self.n_bins):
                         mask = mask_c & (Xd[:, p] == pv)
-                        cnt = np.bincount(Xd[mask, i], minlength=self.n_bins).astype(np.float64)
+                        cnt = np.bincount(Xd[mask, i], weights=sw[mask], minlength=self.n_bins).astype(np.float64)
                         tab[c, pv] = np.log((cnt + self.alpha) / (np.sum(cnt) + self.alpha * self.n_bins))
                 self.cond_tables_[i] = tab
         return self
@@ -98,27 +107,35 @@ class TANModel:
             out[r] = pr
         return out
 
-    def _conditional_mi(self, xi: np.ndarray, xj: np.ndarray, yc: np.ndarray) -> float:
+    def _conditional_mi(self, xi: np.ndarray, xj: np.ndarray, yc: np.ndarray, sw: np.ndarray) -> float:
         n = len(xi)
         k = self.n_bins
         cvals = np.unique(yc)
+        total_w = float(np.sum(sw))
+        if total_w <= 0.0:
+            return 0.0
         out = 0.0
         for c in cvals:
             mask = yc == c
-            nc = int(np.sum(mask))
-            if nc == 0:
+            wc = float(np.sum(sw[mask]))
+            if wc <= 0.0:
                 continue
-            p_y = nc / n
+            p_y = wc / total_w
             cnt_ij = np.zeros((k, k), dtype=np.float64)
             cnt_i = np.zeros(k, dtype=np.float64)
             cnt_j = np.zeros(k, dtype=np.float64)
-            for a, b in zip(xi[mask], xj[mask]):
-                cnt_ij[int(a), int(b)] += 1.0
-                cnt_i[int(a)] += 1.0
-                cnt_j[int(b)] += 1.0
-            p_ij = (cnt_ij + self.alpha) / (nc + self.alpha * k * k)
-            p_i = (cnt_i + self.alpha) / (nc + self.alpha * k)
-            p_j = (cnt_j + self.alpha) / (nc + self.alpha * k)
+            xic = xi[mask]
+            xjc = xj[mask]
+            swc = sw[mask]
+            for a, b, ww in zip(xic, xjc, swc):
+                aa = int(a)
+                bb = int(b)
+                cnt_ij[aa, bb] += float(ww)
+                cnt_i[aa] += float(ww)
+                cnt_j[bb] += float(ww)
+            p_ij = (cnt_ij + self.alpha) / (wc + self.alpha * k * k)
+            p_i = (cnt_i + self.alpha) / (wc + self.alpha * k)
+            p_j = (cnt_j + self.alpha) / (wc + self.alpha * k)
             ratio = p_ij / np.maximum(p_i[:, None] * p_j[None, :], 1e-15)
             out += p_y * float(np.sum(p_ij * np.log(np.maximum(ratio, 1e-15))))
         return out
