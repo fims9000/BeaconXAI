@@ -18,6 +18,7 @@ from .partition import (
     split_component_time,
 )
 from .types import AuditResult, BeaconConfig, Component, LeafStats, LogitFn
+from .preselect_surrogate import preselect_by_surrogate as preselect_by_surrogate
 
 
 @dataclass
