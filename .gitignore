@@ -20,3 +20,15 @@ pamap2+physical+activity+monitoring.zip
 .DS_Store
 .vscode/
 .idea/
+
+# Embedded generated artifacts
+embedded/.pio/
+embedded/.cache/
+embedded/beacon_policy.h
+embedded/bench_host
+embedded/bench_host.cpp
+embedded/bench_host.log
+embedded/bench_host_summary.csv
+embedded/export_policy.log
+embedded/pio_build.log
+embedded/pio_size.log

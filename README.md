@@ -3,6 +3,39 @@
 BEACON-XAI is a research codebase for **budgeted counter-evidence shortlisting** in low-query black-box settings.
 The main target is multichannel time series, with additional tabular pilots.
 
+## Release Status (Current)
+
+This repository is prepared as a **research release** with:
+
+- final BEACON core/audit pipeline code (`beaconxai/`, `scripts/`, `tests/`);
+- reproducible experiment scripts for Part1/Part2 blocks;
+- embedded policy-layer export/build path (`embedded/`) for ESP32-C3 compilation;
+- local run artifacts excluded from git (outputs, logs, `.pio` caches, generated headers/binaries).
+
+### What is tracked vs not tracked
+
+- **Tracked:** source code, tests, docs, manuscript helper artifacts.
+- **Not tracked:** datasets, `outputs*`, temporary logs, generated embedded build files.
+
+This keeps the repo clean for review and reproducible reruns.
+
+## Quick Release Checklist
+
+```bash
+git status
+pytest -q
+```
+
+Optional build sanity:
+
+```bash
+cd embedded
+pio run -e esp32c3
+pio run -e esp32c3 -t size
+```
+
+If `git status` is clean after these checks, repository is release-ready.
+
 ## What This Repo Contains
 
 - `beaconxai/` — core method implementation (partitioning, neutralization, audit logic)
