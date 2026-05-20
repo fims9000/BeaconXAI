@@ -59,8 +59,21 @@ def _prepare_df(df: pd.DataFrame) -> pd.DataFrame:
     return d
 
 
+def _fmt_f(v: float) -> str:
+    if np.isnan(v):
+        return "NAN"
+    if np.isposinf(v):
+        return "INFINITY"
+    if np.isneginf(v):
+        return "-INFINITY"
+    s = f"{float(v):.8g}"
+    if "." not in s and "e" not in s and "E" not in s:
+        s += ".0"
+    return s + "f"
+
+
 def _arr1(a: np.ndarray) -> str:
-    return "{" + ", ".join(f"{float(x):.8g}f" for x in a.reshape(-1)) + "}"
+    return "{" + ", ".join(_fmt_f(float(x)) for x in a.reshape(-1)) + "}"
 
 
 def _arr1_i(a: np.ndarray) -> str:
@@ -68,7 +81,7 @@ def _arr1_i(a: np.ndarray) -> str:
 
 
 def _arr2(a: np.ndarray) -> str:
-    return "{" + ", ".join("{" + ", ".join(f"{float(x):.8g}f" for x in r) + "}" for r in a) + "}"
+    return "{" + ", ".join("{" + ", ".join(_fmt_f(float(x)) for x in r) + "}" for r in a) + "}"
 
 
 def _arr2_i(a: np.ndarray) -> str:

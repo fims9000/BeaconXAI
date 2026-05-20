@@ -19,14 +19,16 @@ def main() -> None:
     args = parse_args()
     text = Path(args.log).read_text(encoding="utf-8", errors="ignore")
     rx = re.compile(
-        r"BENCH policy=(?P<policy>\w+) iters=(?P<iters>\d+) mean_us=(?P<mean>[\d.]+) p50_us=(?P<p50>\d+) p95_us=(?P<p95>\d+)"
+        r"BENCH policy=(?P<policy>\w+) (?:target_iters=(?P<target_iters>\d+) used_iters=(?P<used_iters>\d+) timeout_us=(?P<timeout>\d+) )?mean_us=(?P<mean>[\d.]+) p50_us=(?P<p50>\d+) p95_us=(?P<p95>\d+)"
     )
     rows = []
     for m in rx.finditer(text):
         rows.append(
             {
                 "policy": m.group("policy"),
-                "iters": int(m.group("iters")),
+                "target_iters": int(m.group("target_iters") or 0),
+                "used_iters": int(m.group("used_iters") or 0),
+                "timeout_us": int(m.group("timeout") or 0),
                 "mean_us": float(m.group("mean")),
                 "p50_us": int(m.group("p50")),
                 "p95_us": int(m.group("p95")),
@@ -42,4 +44,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

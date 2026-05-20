@@ -16,6 +16,13 @@ cd embedded
 pio run -e esp32c3
 ```
 
+Default safety limits (for small devices):
+- `BENCH_ITERS=1000`
+- `BENCH_WARMUP_ITERS=64`
+- `BENCH_TIMEOUT_US=2000000` (2s per policy cap)
+
+You can override them via `platformio.ini` `build_flags`.
+
 3. Run and collect UART logs:
 
 ```bash
