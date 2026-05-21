@@ -1,6 +1,6 @@
 PY ?= .venv/bin/python
 
-.PHONY: sanity smoke data-har data-pamap2 data-wisdm hidden-conflict tan-detection audit-panel portability significance resource-budget all
+.PHONY: sanity smoke data-har data-pamap2 data-wisdm hidden-conflict tan-detection audit-panel portability significance resource-budget reproduce reproduce-quick all
 
 sanity:
 	$(PY) -m py_compile beaconxai/*.py scripts/*.py tests/*.py
@@ -47,3 +47,9 @@ significance:
 all: hidden-conflict portability resource-budget significance
 	@echo "Done. See outputs_composite/ for generated artifacts."
 	@echo "make all requires locally prepared datasets (see DATA_PREPARATION.md)."
+
+reproduce:
+	$(PY) scripts/reproduce_all_figures.py --table all
+
+reproduce-quick:
+	$(PY) scripts/reproduce_all_figures.py --table all --quick

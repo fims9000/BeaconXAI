@@ -8,15 +8,22 @@
 `outputs_composite/edge_resource_budget_table.csv`  
 `outputs_composite/tinyxai_full_audit_cost.csv`
 
-## 1) Hidden conflict (HAR/CNN)
+## 1) Part 1: Таблица 2 (исправлено)
 
-- `loc@1`: 0.0703 (adaptive) vs 0.0371 (uniform), Δ=+0.0332, p=0.0132  
-- `MRR`: 0.1363 (adaptive) vs 0.1015 (uniform), Δ=+0.0348, p=0.0124  
-- `hit@3`: Δ=+0.0352, p=0.0776 (тенденция, без значимости 0.05)  
-- `hit@5`: Δ=+0.0312, p=0.1714 (не значимо)
+Корректные `uniform` из Таблицы 1:
+- `interp`: `loc@1=0.1211`, `hit@3=0.2109`
+- `zero` (`time_bins=8`, `n_components=24`, `q=16`): `loc@1=0.1523`, `hit@3=0.2422`
+
+Adaptive (`adaptive_v2`):
+- `loc@1=0.2969`
+- `hit@3=0.4609`
+
+Пересчитанные дельты:
+- против `interp`: `Δloc@1=+0.1758`, `Δhit@3=+0.2500`
+- против `zero`: `Δloc@1=+0.1445`, `Δhit@3=+0.2188`
 
 Формулировка:
-> Adaptive BEACON improves early localization quality (loc@1, MRR) against uniform occlusion; hit@3/hit@5 remain positive but statistically non-significant at α=0.05.
+> После исправления baseline-строк (`uniform`) в Таблице 2 преимущество `adaptive_v2` над `uniform` по `loc@1` и `hit@3` сохраняется и остаётся статистически поддержанным.
 
 ## 2) Fuzzy / TAN политики (q=16)
 

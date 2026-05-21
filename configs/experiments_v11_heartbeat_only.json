@@ -1,0 +1,41 @@
+{
+  "version": "v11_heartbeat_only",
+  "seed": 42,
+  "n_boot": 5000,
+  "q_rule": {
+    "base_q": 64,
+    "coverage": 0.8,
+    "min_q": 16
+  },
+  "datasets": [
+    {
+      "name": "heartbeat",
+      "path": "data/heartbeat.npz",
+      "model": "extratrees",
+      "neutralizers": ["interp"],
+      "time_bins": [8, 12],
+      "n_total": 380
+    }
+  ],
+  "policies": {
+    "run_tan": true,
+    "run_fuzzy": true,
+    "tan": {
+      "target": "ordinal",
+      "compare_to": "logit_panel",
+      "k_features": 3,
+      "discretizer": "quantile",
+      "bins": "6",
+      "sample_weight": true,
+      "weight_alpha": 5.0
+    },
+    "fuzzy": {
+      "target": "ordinal",
+      "compare_to": "logit_panel",
+      "n_rules": 16,
+      "epochs": 200,
+      "sample_weight": true,
+      "weight_alpha": 5.0
+    }
+  }
+}

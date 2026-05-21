@@ -84,6 +84,20 @@ python -m venv .venv
 
 All commands below write artifacts to `outputs_composite/`.
 
+### Quick Reproduce Entrypoints
+
+```bash
+# Full key-table reproduce (long)
+make reproduce
+
+# Quick smoke reproduce
+make reproduce-quick
+```
+
+This runs:
+- `scripts/benchmark_beacon_vs_uniform.py` (Table-1 style: BEACON vs uniform, Q-sweep),
+- `scripts/run_cross_dataset_benchmark.py` + `aggregate_v11_results.py` + `make_v11_summary_table.py` (Table-2 style policy comparison).
+
 ### 1) Component-level benchmark (PAMAP2/WISDM)
 
 ```bash

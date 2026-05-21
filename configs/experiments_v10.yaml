@@ -1,0 +1,36 @@
+version: v10
+seed: 42
+n_boot: 5000
+multiple_testing:
+  method: bonferroni
+  family_metrics: [delta_auroc, delta_auprc, delta_f1_10]
+datasets:
+  - name: uci_har
+    path: data/uci_har_shifted.npz
+    model: extratrees
+    neutralizers: [interp]
+    budgets:
+      - q_max: 32
+        time_bins: 8
+        n_total: 300
+      - q_max: 64
+        time_bins: 8
+        n_total: 300
+policies:
+  run_tan: true
+  run_fuzzy: true
+  tan:
+    target: ordinal
+    compare_to: logit_panel
+    k_features: 3
+    discretizer: quantile
+    bins: "6"
+    sample_weight: true
+    weight_alpha: 5.0
+  fuzzy:
+    target: ordinal
+    compare_to: logit_panel
+    n_rules: 16
+    epochs: 200
+    sample_weight: true
+    weight_alpha: 5.0

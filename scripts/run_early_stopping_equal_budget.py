@@ -1,0 +1,419 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import sys
+
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import average_precision_score, roc_auc_score
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from beaconxai.audit_features import extract_audit_vector
+from beaconxai.datasets import apply_standardizer, fit_channel_standardizer, load_npz_dataset
+from scripts.run_component_conflict_benchmark import _train_extratrees_local
+
+
+PANEL_COLS = [
+    "m_neg",
+    "M_B_minus",
+    "r_B_minus",
+    "CE_B",
+    "rho_B_cost",
+    "frag_drop",
+    "top1_delta",
+    "top3_sum_delta",
+    "top3_conflict_count",
+    "margin_entropy",
+    "mean_conflict",
+    "var_conflict_proxy",
+    "frac_conflict_top3",
+    "fragility_gap",
+    "ce_density",
+    "var_conflict",
+    "conflict_connectivity",
+    "delta_frag_proxy",
+    "r_cf",
+]
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Early stopping BEACON benchmark (equal-budget vs uniform)")
+    p.add_argument("--dataset", default="data/uci_har_shifted.npz")
+    p.add_argument("--n-total", type=int, default=600)
+    p.add_argument("--time-bins", type=int, default=16)
+    p.add_argument("--q-max", type=int, default=64)
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--tol", type=float, default=0.005)
+    p.add_argument("--min-q", type=int, default=10)
+    p.add_argument("--n-boot", type=int, default=1000)
+    p.add_argument("--out", default="outputs_composite/early_stop_har")
+    return p.parse_args()
+
+
+def _time_slices(t_len: int, n_bins: int) -> list[tuple[int, int]]:
+    edges = np.linspace(0, t_len, n_bins + 1, dtype=int)
+    out = []
+    for i in range(n_bins):
+        t0, t1 = int(edges[i]), int(edges[i + 1])
+        if t1 <= t0:
+            t1 = min(t_len, t0 + 1)
+        out.append((t0, t1))
+    return out
+
+
+def _component_idx(ch: int, b: int, n_bins: int) -> int:
+    return ch * n_bins + b
+
+
+def _component_decode(comp: int, n_bins: int) -> tuple[int, int]:
+    return comp // n_bins, comp % n_bins
+
+
+def _margin(logits: np.ndarray) -> tuple[int, float]:
+    y = int(np.argmax(logits))
+    tmp = logits.copy()
+    tmp[y] = -1e18
+    return y, float(logits[y] - np.max(tmp))
+
+
+def _neutralize_component(x: np.ndarray, t0: int, t1: int, c: int) -> np.ndarray:
+    y = x.copy()
+    if t0 > 0 and t1 < y.shape[0]:
+        left = y[t0 - 1, c]
+        right = y[t1, c]
+        y[t0:t1, c] = np.linspace(left, right, t1 - t0, endpoint=False)
+    else:
+        y[t0:t1, c] = 0.0
+    return y
+
+
+def _inject_hidden_conflict(x: np.ndarray, donor: np.ndarray, c: int, t0: int, t1: int, alpha: float) -> np.ndarray:
+    y = x.copy()
+    src = y[t0:t1, c].copy()
+    d = donor[t0:t1, c].copy()
+    eps = 1e-6
+    d = (d - np.mean(d)) / (np.std(d) + eps)
+    d = d * (np.std(src) + eps) + np.mean(src)
+    mix = (1.0 - alpha) * src + alpha * d
+    mix = (mix - np.mean(mix)) / (np.std(mix) + eps)
+    mix = mix * (np.std(src) + eps) + np.mean(src)
+    y[t0:t1, c] = mix
+    return y
+
+
+def _stratified_split(y: np.ndarray, train_frac: float, val_frac: float, seed: int):
+    rng = np.random.default_rng(seed)
+    tr, va, te = [], [], []
+    for c in np.unique(y):
+        idx = np.where(y == c)[0]
+        rng.shuffle(idx)
+        n = len(idx)
+        n_tr = max(1, int(round(n * train_frac)))
+        n_va = max(1, int(round(n * val_frac)))
+        n_te = max(1, n - n_tr - n_va)
+        tr.append(idx[:n_tr])
+        va.append(idx[n_tr:n_tr + n_va])
+        te.append(idx[n_tr + n_va:])
+    tr = np.concatenate(tr)
+    va = np.concatenate(va)
+    te = np.concatenate(te)
+    rng.shuffle(tr)
+    rng.shuffle(va)
+    rng.shuffle(te)
+    return tr, va, te
+
+
+def _z(x: np.ndarray) -> np.ndarray:
+    x = np.asarray(x, dtype=np.float64)
+    s = float(np.std(x))
+    if s <= 1e-12:
+        return np.zeros_like(x)
+    return (x - float(np.mean(x))) / s
+
+
+def _adaptive_order(x: np.ndarray, t_slices: list[tuple[int, int]], q_max: int, channel_means: np.ndarray | None = None) -> np.ndarray:
+    n_channels = x.shape[1]
+    n_bins = len(t_slices)
+    n_components = n_channels * n_bins
+    energy = np.zeros(n_components, dtype=np.float64)
+    variance = np.zeros(n_components, dtype=np.float64)
+    profile_dist = np.zeros(n_components, dtype=np.float64)
+    mean_dev = np.zeros(n_components, dtype=np.float64)
+    for c in range(n_channels):
+        cm = float(channel_means[c]) if channel_means is not None else 0.0
+        for bi, (t0, t1) in enumerate(t_slices):
+            cid = _component_idx(c, bi, n_bins)
+            v = x[t0:t1, c].astype(np.float64)
+            energy[cid] = float(np.mean(v * v))
+            variance[cid] = float(np.var(v))
+            mean_dev[cid] = float(abs(np.mean(v) - cm))
+            profile_dist[cid] = float(np.sqrt(np.mean((v - cm) ** 2)))
+    score = _z(energy) + _z(variance) + _z(profile_dist) + _z(mean_dev)
+    return np.argsort(-score)[: min(q_max, n_components)]
+
+
+def _delta_for_component(x: np.ndarray, clf, m0: float, comp: int, t_slices: list[tuple[int, int]]) -> float:
+    n_bins = len(t_slices)
+    c, b = _component_decode(int(comp), n_bins)
+    t0, t1 = t_slices[b]
+    xm = _neutralize_component(x, t0, t1, c)
+    _y1, m1 = _margin(clf.logits(xm))
+    return float(m0 - m1)
+
+
+def _build_vector(deltas: np.ndarray, margin: float, q_max: int, sid: int, y: int, seed: int) -> dict[str, float | int | str]:
+    return extract_audit_vector(
+        beacon_result=None,
+        margin=float(margin),
+        q_max=int(q_max),
+        sample_id=int(sid),
+        label=int(y),
+        is_hidden_conflict=int(y),
+        method="early_stop_partial",
+        seed=int(seed),
+        deltas=deltas,
+        rho_b_cost=1.0,
+        frag_drop=0.0,
+    )
+
+
+def _f1_at(y: np.ndarray, s: np.ndarray, frac: float) -> float:
+    n = len(y)
+    k = max(1, int(np.ceil(frac * n)))
+    idx = np.argsort(-s)[:k]
+    pred = np.zeros(n, dtype=np.int64)
+    pred[idx] = 1
+    tp = int(np.sum((pred == 1) & (y == 1)))
+    fp = int(np.sum((pred == 1) & (y == 0)))
+    fn = int(np.sum((pred == 0) & (y == 1)))
+    if tp == 0:
+        return 0.0
+    p = tp / max(tp + fp, 1)
+    r = tp / max(tp + fn, 1)
+    return float(2 * p * r / max(p + r, 1e-12))
+
+
+def _bootstrap_delta(y: np.ndarray, a: np.ndarray, b: np.ndarray, fn, n_boot: int, seed: int):
+    rng = np.random.default_rng(seed)
+    n = len(y)
+    d = np.empty(n_boot, dtype=np.float64)
+    for i in range(n_boot):
+        idx = rng.integers(0, n, size=n)
+        d[i] = float(fn(y[idx], a[idx]) - fn(y[idx], b[idx]))
+    return float(np.mean(d)), float(np.quantile(d, 0.025)), float(np.quantile(d, 0.975)), float(min(1.0, 2.0 * min(np.mean(d <= 0), np.mean(d >= 0))))
+
+
+def main() -> None:
+    args = parse_args()
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(args.seed)
+
+    x_train, y_train, x_test, y_test = load_npz_dataset(args.dataset)
+    mu, sigma = fit_channel_standardizer(x_train)
+    x_train = apply_standardizer(x_train, mu, sigma)
+    x_test = apply_standardizer(x_test, mu, sigma)
+    clf = _train_extratrees_local(x_train, y_train, n_estimators=300, max_features=0.7, min_samples_leaf=1)
+
+    n_channels = x_test.shape[2]
+    t_slices = _time_slices(x_test.shape[1], args.time_bins)
+    n_bins = len(t_slices)
+    n_components = n_channels * n_bins
+    q_max = min(args.q_max, n_components)
+
+    # Build hidden-conflict package (same spirit as part2).
+    target_pos = args.n_total // 2
+    target_neg = args.n_total - target_pos
+    idx_all = np.arange(len(x_test), dtype=np.int64)
+    rng.shuffle(idx_all)
+
+    positives = []
+    pos_src = []
+    pos_cls = []
+    used_src = set()
+    for i in idx_all:
+        if len(positives) >= target_pos:
+            break
+        _yy, m0 = _margin(clf.logits(x_test[i]))
+        yi = int(y_test[i])
+        donor_pool = np.where(y_test != yi)[0]
+        if len(donor_pool) == 0:
+            continue
+        accepted = None
+        for _ in range(20):
+            c = int(rng.integers(0, n_channels))
+            b = int(rng.integers(0, n_bins))
+            t0, t1 = t_slices[b]
+            d_id = int(donor_pool[int(rng.integers(0, len(donor_pool)))])
+            alpha = float(rng.uniform(0.35, 0.65))
+            xc = _inject_hidden_conflict(x_test[i], x_test[d_id], c, t0, t1, alpha)
+            _y1, m1 = _margin(clf.logits(xc))
+            if float(m0 - m1) >= 0.05:
+                accepted = xc
+                break
+        if accepted is None:
+            continue
+        positives.append(accepted)
+        pos_src.append(int(i))
+        pos_cls.append(int(yi))
+        used_src.add(int(i))
+
+    neg_candidates = [int(i) for i in idx_all if int(i) not in used_src]
+    if len(neg_candidates) < target_neg:
+        neg_candidates = [int(i) for i in idx_all]
+    rng.shuffle(neg_candidates)
+    neg_src = neg_candidates[:target_neg]
+    negatives = [x_test[i] for i in neg_src]
+    neg_cls = [int(y_test[i]) for i in neg_src]
+
+    x_pos = np.asarray(positives, dtype=np.float32)
+    x_neg = np.asarray(negatives, dtype=np.float32)
+    y_pos = np.ones(len(x_pos), dtype=np.int64)
+    y_neg = np.zeros(len(x_neg), dtype=np.int64)
+
+    x_det = np.concatenate([x_pos, x_neg], axis=0)
+    y_det = np.concatenate([y_pos, y_neg], axis=0)
+    src_cls = np.asarray(pos_cls + neg_cls, dtype=np.int64)
+    perm = rng.permutation(len(y_det))
+    x_det, y_det, src_cls = x_det[perm], y_det[perm], src_cls[perm]
+    tr, va, te = _stratified_split(y_det, 0.6, 0.2, args.seed)
+
+    global_channel_means = np.mean(x_train, axis=(0, 1)).astype(np.float32)
+
+    # Train policy on full q_max adaptive-order audit vectors.
+    rows_full = []
+    for i in range(len(y_det)):
+        x = x_det[i]
+        y = int(y_det[i])
+        _yy, m0 = _margin(clf.logits(x))
+        order = _adaptive_order(x, t_slices, q_max, channel_means=global_channel_means)
+        d = np.zeros(n_components, dtype=np.float64)
+        for comp in order:
+            d[int(comp)] = _delta_for_component(x, clf, m0, int(comp), t_slices)
+        rows_full.append(_build_vector(d, margin=m0, q_max=q_max, sid=i, y=y, seed=args.seed))
+    df_full = pd.DataFrame(rows_full)
+    cols = [c for c in PANEL_COLS if c in df_full.columns]
+    Xf = df_full[cols].to_numpy(dtype=float)
+    yp = y_det.astype(int)
+    policy_beacon = make_pipeline(StandardScaler(), LogisticRegression(max_iter=3000, solver="lbfgs", random_state=args.seed))
+    policy_beacon.fit(Xf[tr], yp[tr])
+
+    # Early stopping inference on test split.
+    s_early = []
+    q_used = []
+    traces = []
+    for i in te:
+        x = x_det[i]
+        y = int(y_det[i])
+        _yy, m0 = _margin(clf.logits(x))
+        order = _adaptive_order(x, t_slices, q_max, channel_means=global_channel_means)
+        d = np.zeros(n_components, dtype=np.float64)
+        prev = None
+        hist = []
+        used = 0
+        for k, comp in enumerate(order[:q_max], start=1):
+            d[int(comp)] = _delta_for_component(x, clf, m0, int(comp), t_slices)
+            vec = _build_vector(d, margin=m0, q_max=q_max, sid=int(i), y=y, seed=args.seed)
+            xx = np.asarray([[vec[c] for c in cols]], dtype=float)
+            risk = float(policy_beacon.predict_proba(xx)[0, 1])
+            hist.append(risk)
+            used = k
+            if prev is not None and k >= args.min_q and abs(risk - prev) < args.tol:
+                break
+            prev = risk
+        s_early.append(hist[-1] if hist else 0.5)
+        q_used.append(used)
+        traces.append({"sample_id": int(i), "q_used": int(used), "risk_last": float(s_early[-1])})
+
+    q_mean = int(max(1, round(float(np.mean(q_used)))))
+
+    # Uniform fixed-budget baseline at equal mean Q.
+    rows_u_train = []
+    rows_u_test = []
+    for idx_list, sink in ((tr, rows_u_train), (te, rows_u_test)):
+        for i in idx_list:
+            x = x_det[i]
+            y = int(y_det[i])
+            _yy, m0 = _margin(clf.logits(x))
+            d = np.zeros(n_components, dtype=np.float64)
+            cand = rng.choice(n_components, size=min(q_mean, n_components), replace=False)
+            for comp in cand:
+                d[int(comp)] = _delta_for_component(x, clf, m0, int(comp), t_slices)
+            sink.append(_build_vector(d, margin=m0, q_max=q_max, sid=int(i), y=y, seed=args.seed))
+    df_ut = pd.DataFrame(rows_u_train)
+    df_ute = pd.DataFrame(rows_u_test)
+    Xu_tr = df_ut[cols].to_numpy(dtype=float)
+    Xu_te = df_ute[cols].to_numpy(dtype=float)
+    yu_tr = yp[tr]
+    yu_te = yp[te]
+    policy_u = make_pipeline(StandardScaler(), LogisticRegression(max_iter=3000, solver="lbfgs", random_state=args.seed))
+    policy_u.fit(Xu_tr, yu_tr)
+    s_u = policy_u.predict_proba(Xu_te)[:, 1]
+
+    y_te = yp[te]
+    s_e = np.asarray(s_early, dtype=float)
+
+    metrics = {
+        "auroc_early": float(roc_auc_score(y_te, s_e)),
+        "auprc_early": float(average_precision_score(y_te, s_e)),
+        "f1_10_early": float(_f1_at(y_te, s_e, 0.10)),
+        "auroc_uniform_eqQ": float(roc_auc_score(y_te, s_u)),
+        "auprc_uniform_eqQ": float(average_precision_score(y_te, s_u)),
+        "f1_10_uniform_eqQ": float(_f1_at(y_te, s_u, 0.10)),
+        "delta_auroc": float(roc_auc_score(y_te, s_e) - roc_auc_score(y_te, s_u)),
+        "delta_auprc": float(average_precision_score(y_te, s_e) - average_precision_score(y_te, s_u)),
+        "delta_f1_10": float(_f1_at(y_te, s_e, 0.10) - _f1_at(y_te, s_u, 0.10)),
+        "q_max": int(q_max),
+        "q_mean_early": float(np.mean(q_used)),
+        "q_std_early": float(np.std(q_used)),
+        "q_equal_uniform": int(q_mean),
+        "tol": float(args.tol),
+        "min_q": int(args.min_q),
+    }
+
+    boot_rows = []
+    for j, (mname, fn) in enumerate(
+        [
+            ("delta_auroc", roc_auc_score),
+            ("delta_auprc", average_precision_score),
+            ("delta_f1_10", lambda y, s: _f1_at(y, s, 0.10)),
+        ]
+    ):
+        d, lo, hi, p = _bootstrap_delta(y_te, s_e, s_u, fn, args.n_boot, args.seed + 100 + j)
+        boot_rows.append({"metric": mname, "delta": d, "ci_low": lo, "ci_high": hi, "p_value": p})
+
+    pd.DataFrame([metrics]).to_csv(out / "early_stop_vs_uniform_equal_budget.csv", index=False)
+    pd.DataFrame(boot_rows).to_csv(out / "early_stop_vs_uniform_equal_budget_bootstrap.csv", index=False)
+    pd.DataFrame(traces).to_csv(out / "early_stop_query_trace_test.csv", index=False)
+    with (out / "run_manifest.json").open("w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "dataset": args.dataset,
+                "n_total": int(args.n_total),
+                "time_bins": int(args.time_bins),
+                "q_max": int(q_max),
+                "seed": int(args.seed),
+                "tol": float(args.tol),
+                "min_q": int(args.min_q),
+                "n_boot": int(args.n_boot),
+            },
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
+    print(f"saved: {out / 'early_stop_vs_uniform_equal_budget.csv'}")
+    print(f"saved: {out / 'early_stop_vs_uniform_equal_budget_bootstrap.csv'}")
+    print(f"saved: {out / 'early_stop_query_trace_test.csv'}")
+
+
+if __name__ == "__main__":
+    main()

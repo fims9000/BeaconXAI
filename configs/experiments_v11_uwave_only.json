@@ -1,0 +1,37 @@
+{
+  "version": "v11_uwave_only",
+  "seed": 42,
+  "n_boot": 5000,
+  "q_rule": {"base_q": 64, "coverage": 0.8, "min_q": 16},
+  "datasets": [
+    {
+      "name": "uwave",
+      "path": "data/uwave_gesture_library.npz",
+      "model": "extratrees",
+      "neutralizers": ["interp"],
+      "time_bins": [16, 24],
+      "n_total": 428
+    }
+  ],
+  "policies": {
+    "run_tan": true,
+    "run_fuzzy": true,
+    "tan": {
+      "target": "ordinal",
+      "compare_to": "logit_panel",
+      "k_features": 3,
+      "discretizer": "quantile",
+      "bins": "6",
+      "sample_weight": true,
+      "weight_alpha": 5.0
+    },
+    "fuzzy": {
+      "target": "ordinal",
+      "compare_to": "logit_panel",
+      "n_rules": 16,
+      "epochs": 200,
+      "sample_weight": true,
+      "weight_alpha": 5.0
+    }
+  }
+}

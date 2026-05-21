@@ -13,6 +13,10 @@ def _extra_conflict_features(
     deltas: np.ndarray,
     margin: float,
     rho_b_cost: float,
+    m_minus: float,
+    r_b_minus: float,
+    frag_drop: float,
+    window_len: int = 3,
 ) -> dict[str, float]:
     d = np.asarray(deltas, dtype=np.float64).reshape(-1)
     if d.size == 0:
@@ -21,6 +25,10 @@ def _extra_conflict_features(
             "conflict_connectivity": 0.0,
             "delta_frag_proxy": 0.0,
             "r_cf": 0.0,
+            "conflict_spread": 0.0,
+            "conflict_cluster_ratio": 0.0,
+            "interaction_conflict_fragility": 0.0,
+            "entropy_conflict_ratio": 0.0,
         }
 
     # Conflict/support convention:
@@ -38,6 +46,25 @@ def _extra_conflict_features(
         edge_hits = float(np.sum(conf_mask[1:] & conf_mask[:-1]))
         conflict_connectivity = float(edge_hits / max(conf_cnt - 1, 1))
 
+    conf_idx = np.where(conf_mask)[0]
+    if conf_idx.size <= 1:
+        conflict_spread = 0.0
+    else:
+        norm = max(1.0, float(d.size - 1))
+        conflict_spread = float(np.std(conf_idx.astype(np.float64)) / norm)
+
+    if d.size == 0:
+        conflict_cluster_ratio = 0.0
+    elif d.size < window_len:
+        conflict_cluster_ratio = float(np.mean(conf_mask))
+    else:
+        best = 0.0
+        for i in range(0, d.size - window_len + 1):
+            val = float(np.mean(conf_mask[i : i + window_len]))
+            if val > best:
+                best = val
+        conflict_cluster_ratio = float(best)
+
     max_support = float(np.max(sup_mag)) if sup_mag.size > 0 else 0.0
     full_frag_proxy = float(abs(float(margin)) / (max_support + EPS))
     delta_frag_proxy = float(full_frag_proxy - float(rho_b_cost))
@@ -45,11 +72,17 @@ def _extra_conflict_features(
     m_minus = float(np.sum(conf_mag))
     r_cf = float(m_minus / (float(rho_b_cost) + EPS))
     r_cf = float(np.clip(r_cf, 0.0, R_CF_MAX))
+    interaction_conflict_fragility = float(m_minus * max(0.0, float(frag_drop)))
+    entropy_conflict_ratio = float(margin_entropy_from_margin(margin) / (max(float(r_b_minus), EPS)))
     return {
         "var_conflict": var_conflict,
         "conflict_connectivity": conflict_connectivity,
         "delta_frag_proxy": delta_frag_proxy,
         "r_cf": r_cf,
+        "conflict_spread": conflict_spread,
+        "conflict_cluster_ratio": conflict_cluster_ratio,
+        "interaction_conflict_fragility": interaction_conflict_fragility,
+        "entropy_conflict_ratio": entropy_conflict_ratio,
     }
 
 
@@ -139,7 +172,14 @@ def extract_audit_vector(
     m_neg = float(-margin)
     top = summarize_deltas(deltas_arr)
     m_ent = float(margin_entropy_from_margin(margin) if margin_entropy is None else margin_entropy)
-    extra = _extra_conflict_features(deltas_arr, margin=float(margin), rho_b_cost=float(rho_cost_v))
+    extra = _extra_conflict_features(
+        deltas_arr,
+        margin=float(margin),
+        rho_b_cost=float(rho_cost_v),
+        m_minus=float(m_minus),
+        r_b_minus=float(r_minus),
+        frag_drop=float(frag_drop_v),
+    )
 
     return {
         "sample_id": int(sample_id),
@@ -163,6 +203,10 @@ def extract_audit_vector(
         "conflict_connectivity": extra["conflict_connectivity"],
         "delta_frag_proxy": extra["delta_frag_proxy"],
         "r_cf": extra["r_cf"],
+        "conflict_spread": extra["conflict_spread"],
+        "conflict_cluster_ratio": extra["conflict_cluster_ratio"],
+        "interaction_conflict_fragility": extra["interaction_conflict_fragility"],
+        "entropy_conflict_ratio": extra["entropy_conflict_ratio"],
         "method": str(method),
         "q_max": int(q_max),
         "seed": int(seed),
