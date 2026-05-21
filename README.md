@@ -1,77 +1,71 @@
 # BeaconXAI
 
-BEACON-XAI is a research codebase for **budgeted counter-evidence shortlisting** in low-query black-box settings.
-The main target is multichannel time series, with additional tabular pilots.
+Research codebase for **budgeted counter-evidence auditing** in black-box time-series models.
 
-## Release Status (Current)
+Repository scope: two companion studies.
 
-This repository is prepared as a **research release** with:
+- **Part 1**: component localization (counter-evidence shortlisting, low budget).
+- **Part 2**: risk auditing with adaptive budget (early stopping) and edge-server feasibility.
 
-- final BEACON core/audit pipeline code (`beaconxai/`, `scripts/`, `tests/`);
-- reproducible experiment scripts for Part1/Part2 blocks;
-- embedded policy-layer export/build path (`embedded/`) for ESP32-C3 compilation;
-- local run artifacts excluded from git (outputs, logs, `.pio` caches, generated headers/binaries).
+## Status
 
-### What is tracked vs not tracked
+- Code and scripts are reproducible for published tables.
+- Final submission-oriented tag: `v12-final` (see tags).
+- Datasets are not bundled (download/preprocess locally into `data/`).
 
-- **Tracked:** source code, tests, docs, manuscript helper artifacts.
-- **Not tracked:** datasets, `outputs*`, temporary logs, generated embedded build files.
+## Key Results (Claim-Safe)
 
-This keeps the repo clean for review and reproducible reruns.
+### Part 1 (Localization, PAMAP2)
 
-## Quick Release Checklist
+Adaptive shortlist (`adaptive_v2`) improves localization over uniform occlusion in the confirmed PAMAP2 setup.
 
-```bash
-git status
-pytest -q
-```
+| Method | loc@1 | hit@3 |
+|---|---:|---:|
+| Uniform (interp) | 0.1211 | 0.2109 |
+| BEACON adaptive_v2 | 0.2969 | 0.4609 |
 
-Optional build sanity:
+### Part 2 (Risk audit, adaptive budget)
 
-```bash
-cd embedded
-pio run -e esp32c3
-pio run -e esp32c3 -t size
-```
+Early stopping reduces average additional checks from `Q=64` to about `~11` (roughly 5–6x budget reduction), but equal-budget quality gains over uniform are **not** supported in the current protocol.
 
-If `git status` is clean after these checks, repository is release-ready.
+| Dataset | q_mean | ΔAUROC vs equal-budget uniform | p-value |
+|---|---:|---:|---:|
+| UCI HAR | 10.69 | -0.0528 | 0.252 |
+| PAMAP2 | 11.10 | -0.0736 | 0.200 |
+| WISDM | 10.59 | -0.0481 | 0.420 |
 
-## What This Repo Contains
+Interpretation: strong engineering gain (latency/budget), cautious quality claim.
 
-- `beaconxai/` — core method implementation (partitioning, neutralization, audit logic)
-- `scripts/` — experiments and table/figure generation
-- `tests/` — smoke/unit tests
-- `requirements.txt` — minimal base deps
+## Edge / Portability Summary
 
-`data/` and `outputs*/` are local-only (gitignored).
+Measured on HAR + ExtraTrees (Ryzen 7 7840HS):
 
-## Canonical Paper Artifacts (use these for claims)
+- `inference_only p50`: **7.30 ms**
+- `BEACON core Q64 p50`: **436.07 ms**
+- `early-stop estimate`: **81.8–93.3 ms** (~5x faster than core Q64)
 
-Use only these files as the final manuscript source:
+Raspberry Pi 4 in this repo is **estimate-only** (not direct measurement): about `0.7–1.0 s` per audited sample under current assumptions.
 
-- `outputs_composite/table8_significance.csv`
-- `outputs_composite/audit_panel_vs_scalar.csv`
-- `outputs_composite/audit_policy_deltas.csv`
-- `outputs_composite/audit_beacon_vs_uniform.csv`
-- `outputs_composite/edge_resource_budget_table.csv`
-- `outputs_composite/tinyxai_full_audit_cost.csv`
-- `outputs_composite/part2_extended_v6/table2_q64_metric_ci.csv`
-- `outputs_composite/edge_resource_budget_q64_profile.csv`
-- `artifacts/beacon_article_insert_pack_ru.md`
-- `artifacts/beacon_q1_submission_pack.md`
+## Repository Layout
 
-Everything else in `outputs_composite/` should be treated as exploratory or archived runs.
+- `beaconxai/` — core library (audit logic, features, utilities)
+- `scripts/` — experiment runners and aggregators
+- `configs/` — experiment configs (cross-dataset, v10/v11)
+- `artifacts/` — manuscript insert packs and summaries
+- `supplementary/` — export-ready tables used in appendix/supp
 
-## Environment
+Local-only (gitignored): `data/`, `outputs_composite/`, build caches/logs.
 
-Conda:
+## Setup
+
+### Conda
 
 ```bash
 conda env create -f environment.yml
 conda activate beaconxai
 ```
 
-Pip/venv:
+### venv
 
 ```bash
 python -m venv .venv
@@ -80,307 +74,70 @@ python -m venv .venv
 .venv/bin/pip install -e .
 ```
 
-## Reproduce Main Paper Blocks
+## Repro Commands
 
-All commands below write artifacts to `outputs_composite/`.
-
-### Quick Reproduce Entrypoints
+### Quick
 
 ```bash
-# Full key-table reproduce (long)
-make reproduce
-
-# Quick smoke reproduce
 make reproduce-quick
 ```
 
-This runs:
-- `scripts/benchmark_beacon_vs_uniform.py` (Table-1 style: BEACON vs uniform, Q-sweep),
-- `scripts/run_cross_dataset_benchmark.py` + `aggregate_v11_results.py` + `make_v11_summary_table.py` (Table-2 style policy comparison).
-
-### 1) Component-level benchmark (PAMAP2/WISDM)
+### Main cross-dataset policy block (v11)
 
 ```bash
-.venv/bin/python scripts/run_component_conflict_benchmark.py \
-  --npz-path data/pamap2_acc9_w200s100_p095.npz \
-  --dataset-name pamap2 --model extratrees \
-  --q-values 8,16 --group-mode pamap3 --time-bins 12 \
-  --neutralizer interp --partition-mode sensor_group_time \
-  --out outputs_composite/component_localization_results_table.csv \
-  --per-sample-out outputs_composite/component_localization_per_sample.csv
+.venv/bin/python scripts/run_cross_dataset_benchmark.py \
+  --config configs/experiments_v11_cross_dataset.json \
+  --out-root outputs_composite/v11_cross_dataset
 ```
 
-### 2) Adapted TS-XAI baselines (RISE-style, KernelSHAP-components)
+Then aggregate:
 
 ```bash
-.venv/bin/python scripts/run_pamap2_tsxai_baselines.py \
-  --out-summary outputs_composite/pamap2_tsxai_baselines_summary.csv \
-  --out-per-sample outputs_composite/pamap2_tsxai_baselines_per_sample.csv
+.venv/bin/python scripts/aggregate_v11_results.py
+.venv/bin/python scripts/make_v11_summary_table.py
 ```
 
-### 3) Tabular pilot (Adult, RF/XGB)
+### BEACON vs uniform benchmark (v12)
 
 ```bash
-.venv/bin/python scripts/run_tabular_conflict_benchmark.py \
-  --out-dir outputs_composite
+.venv/bin/python scripts/benchmark_beacon_vs_uniform.py \
+  --datasets har,pamap2,wisdm \
+  --budgets 16,32,64 \
+  --n-boot 2000 \
+  --adaptive-v2 \
+  --out-root outputs_composite/v12_beacon_vs_uniform_full
 ```
 
-### 4) Practical HAR portability/fault blocks
+### Early-stop full run (HAR/PAMAP2/WISDM)
 
 ```bash
-.venv/bin/python scripts/run_har_sensor_fault_benchmark.py \
-  --out-summary outputs_composite/har_sensor_fault_localization_table.csv \
-  --out-per-sample outputs_composite/har_sensor_fault_localization_per_sample.csv
-
-.venv/bin/python scripts/run_har_hidden_conflict_benchmark.py \
-  --out-summary outputs_composite/har_hidden_conflict_localization_table.csv \
-  --out-per-sample outputs_composite/har_hidden_conflict_localization_per_sample.csv
-
-.venv/bin/python scripts/measure_portability.py \
-  --out outputs_composite/edge_portability_profile.csv
-
-.venv/bin/python scripts/estimate_resource_budget.py \
-  --profile-csv outputs_composite/edge_portability_profile.csv \
-  --out outputs_composite/edge_resource_budget_table.csv
+./scripts/run_early_stop_v12_full.sh
 ```
 
-### 5) Audit panel tables
+Produces:
 
-```bash
-.venv/bin/python scripts/make_audit_panel_tables.py --n-boot 1000 --tan-bins 6
-```
+- `outputs_composite/early_stop_v12_full_summary.csv`
+- `artifacts/early_stop_v12_full_summary.md`
 
-This step now exports alert-policy comparison with four modes:
-`scalar`, `panel` (logit), `fuzzy_policy`, `tan_policy`.
-It also exports bootstrap deltas for policy-vs-policy checks:
-`outputs_composite/audit_policy_deltas.csv`.
+## Canonical Files for Manuscript Claims
 
-### 5.1) One-command final policy/statistics rerun
+- `artifacts/part2_earlystop_insert_pack_ru_en_v12.md`
+- `artifacts/handoff_science_analysis_v12_draft_ru.md`
+- `artifacts/v11_full_summary.md`
+- `outputs_composite/edge_portability_profile_v12.csv`
+- `outputs_composite/edge_resource_budget_table_v12.csv`
+- `outputs_composite/edge_portability_earlystop_estimate_v12.csv`
+- `outputs_composite/early_stop_v12_full_summary.csv`
 
-```bash
-./scripts/run_full_experiments.sh --bootstrap 1000 --tan-bins 6
-```
+## Notes on TAN/Fuzzy
 
-This script regenerates:
-- `outputs_composite/audit_panel_vs_scalar.csv`
-- `outputs_composite/audit_policy_deltas.csv`
-- `outputs_composite/audit_beacon_vs_uniform.csv`
-- `outputs_composite/table8_significance.csv`
-- `outputs_composite/edge_resource_budget_table.csv`
+- `logit-panel` is the practical baseline.
+- `TAN` shows local improvements on specific WISDM settings only.
+- `Fuzzy` (current fixed-rule setup) does not support a stable positive quality claim.
 
-### 6) Hidden-conflict significance (paired bootstrap)
+Detailed comparisons are kept in supplementary artifacts.
 
-```bash
-.venv/bin/python scripts/compute_hidden_conflict_significance.py \
-  --per-sample outputs_composite/har_hidden_conflict_localization_per_sample.csv \
-  --out outputs_composite/table8_significance.csv
-```
+## Citation
 
-### 7) Hidden-conflict detection with TAN (new)
+If you use this code, cite the associated BEACON-XAI papers and link this repository tag.
 
-```bash
-.venv/bin/python scripts/run_har_hidden_conflict_tan.py \
-  --out-summary outputs_composite/har_hidden_conflict_detection_tan_table.csv \
-  --out-per-sample outputs_composite/har_hidden_conflict_detection_tan_per_sample.csv
-```
-
-### 8) Q-sweep: BEACON vs uniform (detection panel)
-
-```bash
-.venv/bin/python scripts/run_beacon_uniform_q_sweep.py \
-  --q-values 16,32,64 \
-  --neutralizers interp,zero,channel_mean,train_class_mean \
-  --n-boot 500 \
-  --out-summary outputs_composite/beacon_uniform_q_sweep.csv \
-  --out-bootstrap outputs_composite/beacon_uniform_q_sweep_bootstrap.csv
-```
-
-`channel_mean -> mean` and `train_class_mean -> class_mean` are accepted aliases.
-
-### 9) Extended Part2 pipeline (BEACON features -> TAN/fuzzy/fuzzy-gate)
-
-```bash
-.venv/bin/python scripts/run_part2_extended.py \
-  --dataset data/uci_har_shifted.npz \
-  --n-total 5000 \
-  --q-max 16 \
-  --seed 42 \
-  --out outputs_composite/part2_extended
-```
-
-Main artifacts:
-- `audit_features_beacon_core.csv`
-- `audit_features_uniform.csv`
-- `tan_sweep_results.csv`
-- `tan_final_test.csv`
-- `fuzzy_policy_results.csv`
-- `fuzzy_final_test.csv`
-- `policy_comparison.csv`
-- `bootstrap_deltas.csv`
-- `split_manifest.json`
-
-### 10) Full-audit cost envelope (TinyXAI section)
-
-```bash
-.venv/bin/python scripts/estimate_full_audit_cost.py \
-  --profile-csv outputs_composite/edge_portability_profile.csv \
-  --resource-csv outputs_composite/edge_resource_budget_table.csv \
-  --out outputs_composite/tinyxai_full_audit_cost.csv
-```
-
-### 11) One-command paper rerun
-
-```bash
-make all
-# or
-.venv/bin/python scripts/run_all.py
-```
-
-`make all` requires locally prepared datasets. Run `DATA_PREPARATION.md` first.
-Optional new blocks:
-- `--run-tan-detection` (hidden-conflict detection with TAN)
-- `--run-audit-panel` (includes fuzzy-panel policy table)
-
-### 12) v6 Q1 candidate package
-
-This block is the strict Q1 gate: it runs Q-sweep, fuzzy_v5/soft-mix policies,
-sensor anomaly localization, simple baselines, full-audit cost, and a claim registry.
-
-Fast smoke:
-
-```bash
-.venv/bin/python scripts/run_v6_experiments.py \
-  --skip-policy-grid \
-  --q-list 4 \
-  --anomaly-model extratrees \
-  --anomaly-max-test 32 \
-  --n-boot 20 \
-  --base-out outputs_composite/part2_extended_v6_smoke
-```
-
-Full v6 candidate:
-
-```bash
-/home/lebedeffson/Code/deep-neuro-fuzzy/.venv/bin/python scripts/run_v6_experiments.py \
-  --dataset data/uci_har_shifted.npz \
-  --model cnn1d \
-  --device cuda \
-  --q-list 16,32,64 \
-  --neutralizers interp,zero,mean,class_mean \
-  --n-total 5000 \
-  --anomaly-model cnn1d \
-  --anomaly-max-test 512 \
-  --anomaly-fault-types spike,drift,stuck_sensor,dropout \
-  --n-boot 1000 \
-  --base-out outputs_composite/part2_extended_v6
-```
-
-Main v6 artifacts:
-- `beacon_vs_uniform_q_sweep.csv`
-- `bootstrap_deltas_v6.csv`
-- `sensor_anomaly_localization.csv`
-- `sensor_anomaly_bootstrap.csv`
-- `tinyxai_full_audit_cost.csv`
-- `manuscript_claim_registry_v6.csv`
-
-### 13) v8 Track A runner + embedded policy export
-
-Run v8 grid (time-bins/Q/neutralizer) and aggregate strict artifacts:
-
-```bash
-.venv/bin/python scripts/run_v8_experiments.py \
-  --dataset data/uci_har_shifted.npz \
-  --model extratrees \
-  --time-bins-list 16 \
-  --q-list 16,32,64 \
-  --neutralizers interp \
-  --preselect-mode adaptive_v2 \
-  --n-boot 1000 \
-  --base-out outputs_composite/part2_extended_v8
-```
-
-Main v8 artifacts:
-- `beacon_vs_uniform_q_sweep_v8.csv`
-- `bootstrap_deltas_v8.csv`
-- `har_component_budget_summary_v8.csv`
-- `manuscript_claim_registry_v8.csv`
-
-Improved policy training blocks:
-
-```bash
-.venv/bin/python scripts/train_tan_improved.py \
-  --bundle-dir outputs_composite/part2_extended_v8/tb16_q16_interp
-```
-
-```bash
-.venv/bin/python scripts/train_fuzzy_improved.py \
-  --bundle-dir outputs_composite/part2_extended_v8/tb16_q16_interp
-```
-
-Hybrid sensor-fault benchmark:
-
-```bash
-.venv/bin/python scripts/run_har_sensor_fault_benchmark.py \
-  --npz-path data/uci_har_shifted.npz \
-  --model extratrees \
-  --q 16 \
-  --enable-hybrid
-```
-
-Export policy layer to C++ header (`h(a(x))` only):
-
-```bash
-.venv/bin/python scripts/export_policy_to_cpp.py \
-  --bundle-dir outputs_composite/part2_extended_v8/tb16_q16_interp \
-  --out-header embedded/beacon_policy.h
-```
-
-## Quick Smoke Check
-
-```bash
-make smoke
-```
-
-## Final Aggregated Results File
-
-Primary one-file summary for manuscript work:
-
-- `outputs_composite/article_results_all_in_one.md`
-- `outputs_composite/edge_resource_budget_table.csv`
-
-## Reproducibility Notes
-
-- All reported experiments use seed `42` unless otherwise stated.
-- Supported partition modes:
-  - `time_only` (time-first 1D chunks),
-  - `time_channel` (balanced 2D chunks),
-  - `channel_time` (channel-first chunks),
-  - `sensor_group_time` (sensor-group chunks over time),
-  - `fuzzy_chunks` (alias of `sensor_group_time` for manuscript wording).
-- Compare methods together with `model calls`, not only ranking metrics.
-- In low-dimensional tabular settings, uniform occlusion can be near-exhaustive at moderate budgets.
-- For portability profiling, CPU-affinity/nice constraints are supported; fixed frequency may require root/system support.
-- Data preparation steps are documented in `DATA_PREPARATION.md`.
-- End-to-end reproduction flow is documented in `REPRODUCIBILITY.md`.
-- Manuscript should cite a fixed code tag (e.g., `v1.0-submission`), not moving `main`.
-
-## Submission Artifacts
-
-Reference result artifacts can be attached as a GitHub Release bundle:
-
-- `v1.0-submission-artifacts.zip`
-
-Recommended contents: `table8_significance.csv`, `edge_resource_budget_table.csv`,
-final manuscript tables, and a short `reproduction_log.txt`.
-
-## Sanity Check
-
-```bash
-.venv/bin/python -m py_compile beaconxai/*.py scripts/*.py tests/*.py
-```
-
-## Pre-Publication Checklist
-
-- Verify `LICENSE`, citation metadata (`CITATION.cff`) and reproducibility commands before submission.
-- Add canonical citation metadata (`CITATION.cff` or BibTeX in docs).
-- Ensure referenced figures/tables in manuscript are present and numbered consistently.
