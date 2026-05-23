@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import pickle
 from pathlib import Path
 import sys
 
@@ -55,6 +56,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tol", type=float, default=0.005)
     p.add_argument("--min-q", type=int, default=10)
     p.add_argument("--n-boot", type=int, default=1000)
+    p.add_argument("--model-cache", default="", help="Optional pickle path for cached base model and standardizer.")
+    p.add_argument("--force-train", action="store_true", help="Retrain and overwrite --model-cache if it exists.")
     p.add_argument(
         "--baseline",
         choices=["fixed_uniform", "uniform_early_stop", "both"],
@@ -218,6 +221,27 @@ def _bootstrap_delta(y: np.ndarray, a: np.ndarray, b: np.ndarray, fn, n_boot: in
     return float(np.mean(d)), float(np.quantile(d, 0.025)), float(np.quantile(d, 0.975)), float(min(1.0, 2.0 * min(np.mean(d <= 0), np.mean(d >= 0))))
 
 
+def _load_or_train_model(args: argparse.Namespace, x_train: np.ndarray, y_train: np.ndarray):
+    cache = Path(args.model_cache) if args.model_cache else None
+    if cache and cache.exists() and not args.force_train:
+        print(f"Loading model from disk: {cache}")
+        with cache.open("rb") as f:
+            pack = pickle.load(f)
+        return pack["clf"], pack["mu"], pack["sigma"], "loaded"
+
+    print("Training base ExtraTrees model...")
+    mu, sigma = fit_channel_standardizer(x_train)
+    x_train_std = apply_standardizer(x_train, mu, sigma)
+    clf = _train_extratrees_local(x_train_std, y_train, n_estimators=300, max_features=0.7, min_samples_leaf=1)
+
+    if cache:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        with cache.open("wb") as f:
+            pickle.dump({"clf": clf, "mu": mu, "sigma": sigma}, f)
+        print(f"Saved model cache: {cache}")
+    return clf, mu, sigma, "trained"
+
+
 def _early_stop_scores(
     idx_list: np.ndarray,
     x_det: np.ndarray,
@@ -275,11 +299,10 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(args.seed)
 
-    x_train, y_train, x_test, y_test = load_npz_dataset(args.dataset)
-    mu, sigma = fit_channel_standardizer(x_train)
-    x_train = apply_standardizer(x_train, mu, sigma)
-    x_test = apply_standardizer(x_test, mu, sigma)
-    clf = _train_extratrees_local(x_train, y_train, n_estimators=300, max_features=0.7, min_samples_leaf=1)
+    x_train_raw, y_train, x_test_raw, y_test = load_npz_dataset(args.dataset)
+    clf, mu, sigma, model_source = _load_or_train_model(args, x_train_raw, y_train)
+    x_train = apply_standardizer(x_train_raw, mu, sigma)
+    x_test = apply_standardizer(x_test_raw, mu, sigma)
 
     n_channels = x_test.shape[2]
     t_slices = _time_slices(x_test.shape[1], args.time_bins)
@@ -505,6 +528,8 @@ def main() -> None:
                 "min_q": int(args.min_q),
                 "n_boot": int(args.n_boot),
                 "baseline": str(args.baseline),
+                "model_cache": str(args.model_cache),
+                "model_source": str(model_source),
             },
             f,
             ensure_ascii=False,

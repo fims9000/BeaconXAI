@@ -12,6 +12,7 @@ venv_cuda/
 
 # Data and artifacts
 data/
+models/
 outputs*/
 *.log
 pamap2+physical+activity+monitoring.zip
