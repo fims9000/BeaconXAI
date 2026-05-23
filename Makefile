@@ -1,6 +1,6 @@
 PY ?= .venv/bin/python
 
-.PHONY: sanity smoke data-har data-pamap2 data-wisdm hidden-conflict tan-detection audit-panel portability significance resource-budget reproduce reproduce-quick all
+.PHONY: sanity smoke data-har data-pamap2 data-wisdm hidden-conflict tan-detection audit-panel portability significance resource-budget q1-early-stop-smoke q1-early-stop-full reproduce reproduce-quick all
 
 sanity:
 	$(PY) -m py_compile beaconxai/*.py scripts/*.py tests/*.py
@@ -38,6 +38,22 @@ resource-budget:
 	$(PY) scripts/estimate_resource_budget.py \
 		--profile-csv outputs_composite/edge_portability_profile.csv \
 		--out outputs_composite/edge_resource_budget_table.csv
+
+q1-early-stop-smoke:
+	$(PY) scripts/run_early_stopping_equal_budget.py \
+		--dataset data/uci_har_shifted.npz \
+		--n-total 80 \
+		--time-bins 16 \
+		--q-max 32 \
+		--seed 7 \
+		--tol 0.005 \
+		--min-q 5 \
+		--n-boot 20 \
+		--baseline both \
+		--out outputs_composite/_smoke_uniform_early_stop
+
+q1-early-stop-full:
+	./scripts/run_early_stop_v12_full.sh
 
 significance:
 	$(PY) scripts/compute_hidden_conflict_significance.py \

@@ -28,6 +28,7 @@ run_one() {
     --tol "$tol" \
     --min-q "$minq" \
     --n-boot "$nboot" \
+    --baseline both \
     --out "$OUT_ROOT/$name"
 }
 

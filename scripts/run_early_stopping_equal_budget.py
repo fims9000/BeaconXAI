@@ -55,6 +55,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tol", type=float, default=0.005)
     p.add_argument("--min-q", type=int, default=10)
     p.add_argument("--n-boot", type=int, default=1000)
+    p.add_argument(
+        "--baseline",
+        choices=["fixed_uniform", "uniform_early_stop", "both"],
+        default="fixed_uniform",
+        help="Baseline for BEACON early-stop: fixed equal-budget uniform, uniform with the same early-stop rule, or both.",
+    )
     p.add_argument("--out", default="outputs_composite/early_stop_har")
     return p.parse_args()
 
@@ -212,6 +218,57 @@ def _bootstrap_delta(y: np.ndarray, a: np.ndarray, b: np.ndarray, fn, n_boot: in
     return float(np.mean(d)), float(np.quantile(d, 0.025)), float(np.quantile(d, 0.975)), float(min(1.0, 2.0 * min(np.mean(d <= 0), np.mean(d >= 0))))
 
 
+def _early_stop_scores(
+    idx_list: np.ndarray,
+    x_det: np.ndarray,
+    y_det: np.ndarray,
+    clf,
+    t_slices: list[tuple[int, int]],
+    n_components: int,
+    q_max: int,
+    cols: list[str],
+    policy,
+    seed: int,
+    tol: float,
+    min_q: int,
+    order_fn,
+    trace_prefix: str,
+) -> tuple[np.ndarray, np.ndarray, list[dict[str, float | int | str]]]:
+    scores = []
+    q_used = []
+    traces = []
+    for i in idx_list:
+        x = x_det[i]
+        y = int(y_det[i])
+        _yy, m0 = _margin(clf.logits(x))
+        order = order_fn(int(i), x)
+        d = np.zeros(n_components, dtype=np.float64)
+        prev = None
+        hist = []
+        used = 0
+        for k, comp in enumerate(order[:q_max], start=1):
+            d[int(comp)] = _delta_for_component(x, clf, m0, int(comp), t_slices)
+            vec = _build_vector(d, margin=m0, q_max=q_max, sid=int(i), y=y, seed=seed)
+            xx = np.asarray([[vec[c] for c in cols]], dtype=float)
+            risk = float(policy.predict_proba(xx)[0, 1])
+            hist.append(risk)
+            used = k
+            if prev is not None and k >= min_q and abs(risk - prev) < tol:
+                break
+            prev = risk
+        scores.append(hist[-1] if hist else 0.5)
+        q_used.append(used)
+        traces.append(
+            {
+                "sample_id": int(i),
+                "mode": trace_prefix,
+                "q_used": int(used),
+                "risk_last": float(scores[-1]),
+            }
+        )
+    return np.asarray(scores, dtype=float), np.asarray(q_used, dtype=np.int64), traces
+
+
 def main() -> None:
     args = parse_args()
     out = Path(args.out)
@@ -308,70 +365,31 @@ def main() -> None:
     policy_beacon.fit(Xf[tr], yp[tr])
 
     # Early stopping inference on test split.
-    s_early = []
-    q_used = []
-    traces = []
-    for i in te:
-        x = x_det[i]
-        y = int(y_det[i])
-        _yy, m0 = _margin(clf.logits(x))
-        order = _adaptive_order(x, t_slices, q_max, channel_means=global_channel_means)
-        d = np.zeros(n_components, dtype=np.float64)
-        prev = None
-        hist = []
-        used = 0
-        for k, comp in enumerate(order[:q_max], start=1):
-            d[int(comp)] = _delta_for_component(x, clf, m0, int(comp), t_slices)
-            vec = _build_vector(d, margin=m0, q_max=q_max, sid=int(i), y=y, seed=args.seed)
-            xx = np.asarray([[vec[c] for c in cols]], dtype=float)
-            risk = float(policy_beacon.predict_proba(xx)[0, 1])
-            hist.append(risk)
-            used = k
-            if prev is not None and k >= args.min_q and abs(risk - prev) < args.tol:
-                break
-            prev = risk
-        s_early.append(hist[-1] if hist else 0.5)
-        q_used.append(used)
-        traces.append({"sample_id": int(i), "q_used": int(used), "risk_last": float(s_early[-1])})
+    adaptive_order_fn = lambda _i, x: _adaptive_order(x, t_slices, q_max, channel_means=global_channel_means)
+    s_e, q_used, traces = _early_stop_scores(
+        te,
+        x_det,
+        y_det,
+        clf,
+        t_slices,
+        n_components,
+        q_max,
+        cols,
+        policy_beacon,
+        args.seed,
+        args.tol,
+        args.min_q,
+        adaptive_order_fn,
+        "beacon_early_stop",
+    )
 
     q_mean = int(max(1, round(float(np.mean(q_used)))))
 
-    # Uniform fixed-budget baseline at equal mean Q.
-    rows_u_train = []
-    rows_u_test = []
-    for idx_list, sink in ((tr, rows_u_train), (te, rows_u_test)):
-        for i in idx_list:
-            x = x_det[i]
-            y = int(y_det[i])
-            _yy, m0 = _margin(clf.logits(x))
-            d = np.zeros(n_components, dtype=np.float64)
-            cand = rng.choice(n_components, size=min(q_mean, n_components), replace=False)
-            for comp in cand:
-                d[int(comp)] = _delta_for_component(x, clf, m0, int(comp), t_slices)
-            sink.append(_build_vector(d, margin=m0, q_max=q_max, sid=int(i), y=y, seed=args.seed))
-    df_ut = pd.DataFrame(rows_u_train)
-    df_ute = pd.DataFrame(rows_u_test)
-    Xu_tr = df_ut[cols].to_numpy(dtype=float)
-    Xu_te = df_ute[cols].to_numpy(dtype=float)
-    yu_tr = yp[tr]
-    yu_te = yp[te]
-    policy_u = make_pipeline(StandardScaler(), LogisticRegression(max_iter=3000, solver="lbfgs", random_state=args.seed))
-    policy_u.fit(Xu_tr, yu_tr)
-    s_u = policy_u.predict_proba(Xu_te)[:, 1]
-
     y_te = yp[te]
-    s_e = np.asarray(s_early, dtype=float)
-
     metrics = {
         "auroc_early": float(roc_auc_score(y_te, s_e)),
         "auprc_early": float(average_precision_score(y_te, s_e)),
         "f1_10_early": float(_f1_at(y_te, s_e, 0.10)),
-        "auroc_uniform_eqQ": float(roc_auc_score(y_te, s_u)),
-        "auprc_uniform_eqQ": float(average_precision_score(y_te, s_u)),
-        "f1_10_uniform_eqQ": float(_f1_at(y_te, s_u, 0.10)),
-        "delta_auroc": float(roc_auc_score(y_te, s_e) - roc_auc_score(y_te, s_u)),
-        "delta_auprc": float(average_precision_score(y_te, s_e) - average_precision_score(y_te, s_u)),
-        "delta_f1_10": float(_f1_at(y_te, s_e, 0.10) - _f1_at(y_te, s_u, 0.10)),
         "q_max": int(q_max),
         "q_mean_early": float(np.mean(q_used)),
         "q_std_early": float(np.std(q_used)),
@@ -381,15 +399,96 @@ def main() -> None:
     }
 
     boot_rows = []
-    for j, (mname, fn) in enumerate(
+    comparisons: list[tuple[str, np.ndarray]] = []
+
+    if args.baseline in ("fixed_uniform", "both"):
+        # Uniform fixed-budget baseline at equal mean Q.
+        rows_u_train = []
+        rows_u_test = []
+        for idx_list, sink in ((tr, rows_u_train), (te, rows_u_test)):
+            for i in idx_list:
+                x = x_det[i]
+                y = int(y_det[i])
+                _yy, m0 = _margin(clf.logits(x))
+                d = np.zeros(n_components, dtype=np.float64)
+                cand_rng = np.random.default_rng(args.seed + 100000 + int(i))
+                cand = cand_rng.choice(n_components, size=min(q_mean, n_components), replace=False)
+                for comp in cand:
+                    d[int(comp)] = _delta_for_component(x, clf, m0, int(comp), t_slices)
+                sink.append(_build_vector(d, margin=m0, q_max=q_max, sid=int(i), y=y, seed=args.seed))
+        df_ut = pd.DataFrame(rows_u_train)
+        df_ute = pd.DataFrame(rows_u_test)
+        Xu_tr = df_ut[cols].to_numpy(dtype=float)
+        Xu_te = df_ute[cols].to_numpy(dtype=float)
+        yu_tr = yp[tr]
+        policy_u = make_pipeline(StandardScaler(), LogisticRegression(max_iter=3000, solver="lbfgs", random_state=args.seed))
+        policy_u.fit(Xu_tr, yu_tr)
+        s_u = policy_u.predict_proba(Xu_te)[:, 1]
+
+        metrics.update(
+            {
+                "auroc_uniform_eqQ": float(roc_auc_score(y_te, s_u)),
+                "auprc_uniform_eqQ": float(average_precision_score(y_te, s_u)),
+                "f1_10_uniform_eqQ": float(_f1_at(y_te, s_u, 0.10)),
+                "delta_auroc": float(roc_auc_score(y_te, s_e) - roc_auc_score(y_te, s_u)),
+                "delta_auprc": float(average_precision_score(y_te, s_e) - average_precision_score(y_te, s_u)),
+                "delta_f1_10": float(_f1_at(y_te, s_e, 0.10) - _f1_at(y_te, s_u, 0.10)),
+            }
+        )
+        comparisons.append(("fixed_uniform", np.asarray(s_u, dtype=float)))
+
+    if args.baseline in ("uniform_early_stop", "both"):
+        uniform_order_fn = lambda i, _x: np.random.default_rng(args.seed + 200000 + int(i)).permutation(n_components)[:q_max]
+        s_ues, q_ues, traces_uniform = _early_stop_scores(
+            te,
+            x_det,
+            y_det,
+            clf,
+            t_slices,
+            n_components,
+            q_max,
+            cols,
+            policy_beacon,
+            args.seed,
+            args.tol,
+            args.min_q,
+            uniform_order_fn,
+            "uniform_early_stop",
+        )
+        traces.extend(traces_uniform)
+        metrics.update(
+            {
+                "auroc_uniform_early_stop": float(roc_auc_score(y_te, s_ues)),
+                "auprc_uniform_early_stop": float(average_precision_score(y_te, s_ues)),
+                "f1_10_uniform_early_stop": float(_f1_at(y_te, s_ues, 0.10)),
+                "delta_auroc_vs_uniform_early_stop": float(roc_auc_score(y_te, s_e) - roc_auc_score(y_te, s_ues)),
+                "delta_auprc_vs_uniform_early_stop": float(average_precision_score(y_te, s_e) - average_precision_score(y_te, s_ues)),
+                "delta_f1_10_vs_uniform_early_stop": float(_f1_at(y_te, s_e, 0.10) - _f1_at(y_te, s_ues, 0.10)),
+                "q_mean_uniform_early_stop": float(np.mean(q_ues)),
+                "q_std_uniform_early_stop": float(np.std(q_ues)),
+            }
+        )
+        comparisons.append(("uniform_early_stop", np.asarray(s_ues, dtype=float)))
+
+    for comp_name, s_base in comparisons:
+        for j, (mname, fn) in enumerate(
         [
             ("delta_auroc", roc_auc_score),
             ("delta_auprc", average_precision_score),
             ("delta_f1_10", lambda y, s: _f1_at(y, s, 0.10)),
         ]
-    ):
-        d, lo, hi, p = _bootstrap_delta(y_te, s_e, s_u, fn, args.n_boot, args.seed + 100 + j)
-        boot_rows.append({"metric": mname, "delta": d, "ci_low": lo, "ci_high": hi, "p_value": p})
+        ):
+            d, lo, hi, p = _bootstrap_delta(y_te, s_e, s_base, fn, args.n_boot, args.seed + 100 + j)
+            boot_rows.append(
+                {
+                    "comparison": f"beacon_early_stop_vs_{comp_name}",
+                    "metric": mname,
+                    "delta": d,
+                    "ci_low": lo,
+                    "ci_high": hi,
+                    "p_value": p,
+                }
+            )
 
     pd.DataFrame([metrics]).to_csv(out / "early_stop_vs_uniform_equal_budget.csv", index=False)
     pd.DataFrame(boot_rows).to_csv(out / "early_stop_vs_uniform_equal_budget_bootstrap.csv", index=False)
@@ -405,6 +504,7 @@ def main() -> None:
                 "tol": float(args.tol),
                 "min_q": int(args.min_q),
                 "n_boot": int(args.n_boot),
+                "baseline": str(args.baseline),
             },
             f,
             ensure_ascii=False,
