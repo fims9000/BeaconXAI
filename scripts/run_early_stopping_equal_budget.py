@@ -67,6 +67,12 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--policy-prefix-list", default="10,12,16,24,32,64")
     p.add_argument(
+        "--policy-model",
+        choices=["logit", "lightgbm"],
+        default="logit",
+        help="Risk policy model. logit is portable; lightgbm is server-side only.",
+    )
+    p.add_argument(
         "--order-mode",
         choices=["adaptive", "eta_transport", "risk_importance", "diverse_importance"],
         default="adaptive",
@@ -460,6 +466,26 @@ def _load_or_train_model(args: argparse.Namespace, x_train: np.ndarray, y_train:
     return clf, mu, sigma, "trained"
 
 
+def _make_policy_model(kind: str, seed: int):
+    if kind == "logit":
+        return make_pipeline(StandardScaler(), LogisticRegression(max_iter=3000, solver="lbfgs", random_state=seed))
+    if kind == "lightgbm":
+        try:
+            import lightgbm as lgb
+        except ModuleNotFoundError as exc:
+            raise SystemExit("lightgbm is not installed; install it or use --policy-model logit") from exc
+        return lgb.LGBMClassifier(
+            n_estimators=80,
+            max_depth=3,
+            learning_rate=0.05,
+            subsample=0.9,
+            colsample_bytree=0.9,
+            random_state=seed,
+            verbosity=-1,
+        )
+    raise ValueError(f"unknown policy model: {kind}")
+
+
 def _early_stop_scores(
     idx_list: np.ndarray,
     x_det: np.ndarray,
@@ -699,7 +725,7 @@ def main() -> None:
     y_policy_arr = np.asarray(y_policy, dtype=int)
     sid_policy_arr = np.asarray(sid_policy, dtype=int)
     train_mask = np.isin(sid_policy_arr, tr)
-    policy_beacon = make_pipeline(StandardScaler(), LogisticRegression(max_iter=3000, solver="lbfgs", random_state=args.seed))
+    policy_beacon = _make_policy_model(args.policy_model, args.seed)
     policy_beacon.fit(Xf[train_mask], y_policy_arr[train_mask])
 
     # Early stopping inference on test split.
@@ -774,7 +800,7 @@ def main() -> None:
         Xu_tr = df_ut[cols].to_numpy(dtype=float)
         Xu_te = df_ute[cols].to_numpy(dtype=float)
         yu_tr = yp[tr]
-        policy_u = make_pipeline(StandardScaler(), LogisticRegression(max_iter=3000, solver="lbfgs", random_state=args.seed))
+        policy_u = _make_policy_model(args.policy_model, args.seed)
         policy_u.fit(Xu_tr, yu_tr)
         s_u = policy_u.predict_proba(Xu_te)[:, 1]
 
@@ -862,6 +888,7 @@ def main() -> None:
                 "model_source": str(model_source),
                 "policy_train_mode": str(args.policy_train_mode),
                 "policy_prefix_list": [int(v) for v in prefix_values],
+                "policy_model": str(args.policy_model),
                 "order_mode": str(args.order_mode),
                 "div_lambda": float(args.div_lambda),
                 "eta_ref_max": int(args.eta_ref_max),
