@@ -43,6 +43,7 @@ PANEL_COLS = [
     "conflict_connectivity",
     "delta_frag_proxy",
     "r_cf",
+    "q_fraction",
 ]
 
 
@@ -58,6 +59,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--n-boot", type=int, default=1000)
     p.add_argument("--model-cache", default="", help="Optional pickle path for cached base model and standardizer.")
     p.add_argument("--force-train", action="store_true", help="Retrain and overwrite --model-cache if it exists.")
+    p.add_argument(
+        "--policy-train-mode",
+        choices=["full", "prefix_mix"],
+        default="full",
+        help="Train risk policy on full q_max vectors or a mix of partial-prefix audit vectors.",
+    )
+    p.add_argument("--policy-prefix-list", default="10,12,16,24,32,64")
     p.add_argument(
         "--baseline",
         choices=["fixed_uniform", "uniform_early_stop", "both"],
@@ -179,8 +187,17 @@ def _delta_for_component(x: np.ndarray, clf, m0: float, comp: int, t_slices: lis
     return float(m0 - m1)
 
 
-def _build_vector(deltas: np.ndarray, margin: float, q_max: int, sid: int, y: int, seed: int) -> dict[str, float | int | str]:
-    return extract_audit_vector(
+def _build_vector(
+    deltas: np.ndarray,
+    margin: float,
+    q_max: int,
+    sid: int,
+    y: int,
+    seed: int,
+    q_used: int | None = None,
+    n_components: int | None = None,
+) -> dict[str, float | int | str]:
+    vec = extract_audit_vector(
         beacon_result=None,
         margin=float(margin),
         q_max=int(q_max),
@@ -193,6 +210,13 @@ def _build_vector(deltas: np.ndarray, margin: float, q_max: int, sid: int, y: in
         rho_b_cost=1.0,
         frag_drop=0.0,
     )
+    if q_used is None:
+        q_used = q_max
+    if n_components is None:
+        n_components = len(deltas)
+    vec["q_used"] = int(q_used)
+    vec["q_fraction"] = float(q_used) / float(max(1, n_components))
+    return vec
 
 
 def _f1_at(y: np.ndarray, s: np.ndarray, frac: float) -> float:
@@ -272,7 +296,16 @@ def _early_stop_scores(
         used = 0
         for k, comp in enumerate(order[:q_max], start=1):
             d[int(comp)] = _delta_for_component(x, clf, m0, int(comp), t_slices)
-            vec = _build_vector(d, margin=m0, q_max=q_max, sid=int(i), y=y, seed=seed)
+            vec = _build_vector(
+                d,
+                margin=m0,
+                q_max=q_max,
+                sid=int(i),
+                y=y,
+                seed=seed,
+                q_used=k,
+                n_components=n_components,
+            )
             xx = np.asarray([[vec[c] for c in cols]], dtype=float)
             risk = float(policy.predict_proba(xx)[0, 1])
             hist.append(risk)
@@ -369,23 +402,52 @@ def main() -> None:
 
     global_channel_means = np.mean(x_train, axis=(0, 1)).astype(np.float32)
 
-    # Train policy on full q_max adaptive-order audit vectors.
+    prefix_values = [
+        int(v.strip())
+        for v in args.policy_prefix_list.split(",")
+        if v.strip()
+    ]
+    prefix_values = sorted({min(max(1, q), q_max) for q in prefix_values} | {q_max})
+    if args.policy_train_mode == "full":
+        prefix_values = [q_max]
+
+    # Train policy on full q_max vectors or mixed partial-prefix vectors.
     rows_full = []
+    y_policy = []
+    sid_policy = []
     for i in range(len(y_det)):
         x = x_det[i]
         y = int(y_det[i])
         _yy, m0 = _margin(clf.logits(x))
         order = _adaptive_order(x, t_slices, q_max, channel_means=global_channel_means)
         d = np.zeros(n_components, dtype=np.float64)
-        for comp in order:
+        prefix_set = set(prefix_values)
+        for k, comp in enumerate(order[:q_max], start=1):
             d[int(comp)] = _delta_for_component(x, clf, m0, int(comp), t_slices)
-        rows_full.append(_build_vector(d, margin=m0, q_max=q_max, sid=i, y=y, seed=args.seed))
+            if k in prefix_set:
+                rows_full.append(
+                    _build_vector(
+                        d.copy(),
+                        margin=m0,
+                        q_max=q_max,
+                        sid=i,
+                        y=y,
+                        seed=args.seed,
+                        q_used=k,
+                        n_components=n_components,
+                    )
+                )
+                y_policy.append(y)
+                sid_policy.append(i)
     df_full = pd.DataFrame(rows_full)
     cols = [c for c in PANEL_COLS if c in df_full.columns]
     Xf = df_full[cols].to_numpy(dtype=float)
     yp = y_det.astype(int)
+    y_policy_arr = np.asarray(y_policy, dtype=int)
+    sid_policy_arr = np.asarray(sid_policy, dtype=int)
+    train_mask = np.isin(sid_policy_arr, tr)
     policy_beacon = make_pipeline(StandardScaler(), LogisticRegression(max_iter=3000, solver="lbfgs", random_state=args.seed))
-    policy_beacon.fit(Xf[tr], yp[tr])
+    policy_beacon.fit(Xf[train_mask], y_policy_arr[train_mask])
 
     # Early stopping inference on test split.
     adaptive_order_fn = lambda _i, x: _adaptive_order(x, t_slices, q_max, channel_means=global_channel_means)
@@ -438,7 +500,18 @@ def main() -> None:
                 cand = cand_rng.choice(n_components, size=min(q_mean, n_components), replace=False)
                 for comp in cand:
                     d[int(comp)] = _delta_for_component(x, clf, m0, int(comp), t_slices)
-                sink.append(_build_vector(d, margin=m0, q_max=q_max, sid=int(i), y=y, seed=args.seed))
+                sink.append(
+                    _build_vector(
+                        d,
+                        margin=m0,
+                        q_max=q_max,
+                        sid=int(i),
+                        y=y,
+                        seed=args.seed,
+                        q_used=min(q_mean, n_components),
+                        n_components=n_components,
+                    )
+                )
         df_ut = pd.DataFrame(rows_u_train)
         df_ute = pd.DataFrame(rows_u_test)
         Xu_tr = df_ut[cols].to_numpy(dtype=float)
@@ -530,6 +603,8 @@ def main() -> None:
                 "baseline": str(args.baseline),
                 "model_cache": str(args.model_cache),
                 "model_source": str(model_source),
+                "policy_train_mode": str(args.policy_train_mode),
+                "policy_prefix_list": [int(v) for v in prefix_values],
             },
             f,
             ensure_ascii=False,

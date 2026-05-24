@@ -1,6 +1,6 @@
 PY ?= .venv/bin/python
 
-.PHONY: sanity smoke data-har data-pamap2 data-wisdm hidden-conflict tan-detection audit-panel portability significance resource-budget q1-early-stop-smoke q1-early-stop-har-one q1-early-stop-har-seeds q1-early-stop-full reproduce reproduce-quick all
+.PHONY: sanity smoke data-har data-pamap2 data-wisdm hidden-conflict tan-detection audit-panel portability significance resource-budget q1-early-stop-smoke q1-early-stop-har-one q1-har-frontier-seed1 q1-early-stop-har-seeds q1-early-stop-full reproduce reproduce-quick all
 
 sanity:
 	$(PY) -m py_compile beaconxai/*.py scripts/*.py tests/*.py
@@ -65,6 +65,9 @@ q1-early-stop-har-one:
 		--baseline both \
 		--model-cache models/har_extratrees_seed1.pkl \
 		--out outputs_composite/q1_har_seed1_early_stop
+
+q1-har-frontier-seed1:
+	./scripts/run_q1_har_frontier_seed1.sh
 
 q1-early-stop-har-seeds:
 	./scripts/run_q1_har_early_stop_seeds.sh
