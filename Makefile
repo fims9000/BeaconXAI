@@ -1,6 +1,6 @@
 PY ?= .venv/bin/python
 
-.PHONY: sanity smoke data-har data-pamap2 data-wisdm hidden-conflict tan-detection audit-panel portability significance resource-budget q1-early-stop-smoke q1-early-stop-har-one q1-har-frontier-seed1 q1-har-selected-seeds q1-har-divstop-q12-seeds q1-divstop-q12-all part1-har-adaptive-v2-q16 q1-frontier-short-seed1 q1-early-stop-har-seeds q1-early-stop-full reproduce reproduce-quick all
+.PHONY: sanity smoke data-har data-pamap2 data-wisdm hidden-conflict tan-detection audit-panel portability significance resource-budget q1-early-stop-smoke q1-early-stop-har-one q1-har-frontier-seed1 q1-har-selected-seeds q1-har-divstop-q12-seeds q1-divstop-q12-all q1-pamap2-logit-q12-seeds part1-har-adaptive-v2-q16 q1-frontier-short-seed1 q1-early-stop-har-seeds q1-early-stop-full reproduce reproduce-quick all
 
 sanity:
 	$(PY) -m py_compile beaconxai/*.py scripts/*.py tests/*.py
@@ -77,6 +77,9 @@ q1-har-divstop-q12-seeds:
 
 q1-divstop-q12-all:
 	./scripts/run_q1_divstop_q12_all_datasets.sh
+
+q1-pamap2-logit-q12-seeds:
+	./scripts/run_q1_pamap2_logit_q12_seeds.sh
 
 part1-har-adaptive-v2-q16:
 	./scripts/run_part1_har_adaptive_v2_q16_seeds.sh
