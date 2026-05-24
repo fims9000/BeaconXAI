@@ -68,10 +68,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--policy-prefix-list", default="10,12,16,24,32,64")
     p.add_argument(
         "--order-mode",
-        choices=["adaptive", "eta_transport", "risk_importance"],
+        choices=["adaptive", "eta_transport", "risk_importance", "diverse_importance"],
         default="adaptive",
         help="Component order: adaptive proxy, validation risk-importance prior, or ETA transport prior.",
     )
+    p.add_argument("--div-lambda", type=float, default=0.5, help="Redundancy penalty for diverse_importance order.")
     p.add_argument(
         "--eta-ref-max",
         type=int,
@@ -290,6 +291,67 @@ def _fit_risk_importance_order(
         if not np.any(importance > 0):
             importance = np.var(delta_mat, axis=0)
     return np.asarray(np.argsort(-importance), dtype=np.int64)
+
+
+def _fit_diverse_importance_order(
+    idx_ref: np.ndarray,
+    x_det: np.ndarray,
+    y_det: np.ndarray,
+    clf,
+    t_slices: list[tuple[int, int]],
+    n_components: int,
+    div_lambda: float,
+) -> np.ndarray:
+    idx_ref = np.asarray(idx_ref, dtype=np.int64)
+    delta_mat = np.zeros((len(idx_ref), n_components), dtype=np.float64)
+    for row, i in enumerate(idx_ref):
+        x = x_det[int(i)]
+        _yy, m0 = _margin(clf.logits(x))
+        for comp in range(n_components):
+            delta_mat[row, comp] = _delta_for_component(x, clf, m0, comp, t_slices)
+
+    y_ref = y_det[idx_ref].astype(int)
+    if len(np.unique(y_ref)) < 2:
+        importance = np.var(delta_mat, axis=0)
+    else:
+        model = make_pipeline(
+            StandardScaler(),
+            LogisticRegression(
+                penalty="l1",
+                solver="liblinear",
+                C=0.25,
+                max_iter=3000,
+                random_state=0,
+            ),
+        )
+        model.fit(delta_mat, y_ref)
+        importance = np.abs(model.named_steps["logisticregression"].coef_[0])
+        if not np.any(importance > 0):
+            importance = np.var(delta_mat, axis=0)
+
+    u = importance / (float(np.max(importance)) + 1e-12)
+    if len(idx_ref) > 1:
+        corr = np.corrcoef(delta_mat, rowvar=False)
+        corr = np.nan_to_num(np.abs(corr), nan=0.0, posinf=0.0, neginf=0.0)
+        np.fill_diagonal(corr, 0.0)
+    else:
+        corr = np.zeros((n_components, n_components), dtype=np.float64)
+
+    selected: list[int] = []
+    remaining = set(range(n_components))
+    while remaining:
+        if not selected:
+            j = int(max(remaining, key=lambda g: u[g]))
+        else:
+            j = int(
+                max(
+                    remaining,
+                    key=lambda g: float(u[g]) - float(div_lambda) * max(float(corr[g, h]) for h in selected),
+                )
+            )
+        selected.append(j)
+        remaining.remove(j)
+    return np.asarray(selected, dtype=np.int64)
 
 
 def _eta_next_component(observed: list[float], remaining: list[int], eta_profile: dict[str, np.ndarray]) -> int:
@@ -544,7 +606,7 @@ def main() -> None:
     global_channel_means = np.mean(x_train, axis=(0, 1)).astype(np.float32)
 
     eta_profile = None
-    risk_importance_order = None
+    prior_order = None
     if args.order_mode == "eta_transport":
         print("Fitting ETA transport profile on validation detections...")
         eta_profile = _fit_eta_transport_profile(
@@ -560,13 +622,24 @@ def main() -> None:
         )
     elif args.order_mode == "risk_importance":
         print("Fitting risk-importance order on validation detections...")
-        risk_importance_order = _fit_risk_importance_order(
+        prior_order = _fit_risk_importance_order(
             va,
             x_det,
             y_det,
             clf,
             t_slices,
             n_components,
+        )
+    elif args.order_mode == "diverse_importance":
+        print("Fitting diverse-importance order on validation detections...")
+        prior_order = _fit_diverse_importance_order(
+            va,
+            x_det,
+            y_det,
+            clf,
+            t_slices,
+            n_components,
+            args.div_lambda,
         )
 
     prefix_values = [
@@ -590,8 +663,8 @@ def main() -> None:
         prefix_set = set(prefix_values)
         observed: list[float] = []
         remaining = list(range(n_components))
-        if risk_importance_order is not None:
-            order = risk_importance_order[:q_max]
+        if prior_order is not None:
+            order = prior_order[:q_max]
         elif eta_profile is None:
             order = _adaptive_order(x, t_slices, q_max, channel_means=global_channel_means)
         else:
@@ -630,10 +703,10 @@ def main() -> None:
     policy_beacon.fit(Xf[train_mask], y_policy_arr[train_mask])
 
     # Early stopping inference on test split.
-    if risk_importance_order is None:
+    if prior_order is None:
         adaptive_order_fn = lambda _i, x: _adaptive_order(x, t_slices, q_max, channel_means=global_channel_means)
     else:
-        adaptive_order_fn = lambda _i, _x: risk_importance_order[:q_max]
+        adaptive_order_fn = lambda _i, _x: prior_order[:q_max]
     s_e, q_used, traces = _early_stop_scores(
         te,
         x_det,
@@ -790,6 +863,7 @@ def main() -> None:
                 "policy_train_mode": str(args.policy_train_mode),
                 "policy_prefix_list": [int(v) for v in prefix_values],
                 "order_mode": str(args.order_mode),
+                "div_lambda": float(args.div_lambda),
                 "eta_ref_max": int(args.eta_ref_max),
                 "eta_grid": int(args.eta_grid),
             },
