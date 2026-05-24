@@ -67,6 +67,24 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--policy-prefix-list", default="10,12,16,24,32,64")
     p.add_argument(
+        "--order-mode",
+        choices=["adaptive", "eta_transport"],
+        default="adaptive",
+        help="Component order: adaptive proxy or transport-informed ETA prior learned on validation detections.",
+    )
+    p.add_argument(
+        "--eta-ref-max",
+        type=int,
+        default=160,
+        help="Maximum train detections used to fit eta_transport priors.",
+    )
+    p.add_argument(
+        "--eta-grid",
+        type=int,
+        default=32,
+        help="Quantile grid size for eta_transport 1D W2 approximation.",
+    )
+    p.add_argument(
         "--baseline",
         choices=["fixed_uniform", "uniform_early_stop", "both"],
         default="fixed_uniform",
@@ -178,6 +196,83 @@ def _adaptive_order(x: np.ndarray, t_slices: list[tuple[int, int]], q_max: int, 
     return np.argsort(-score)[: min(q_max, n_components)]
 
 
+def _w2_quantile_distance(values: np.ndarray, target_q: np.ndarray, grid: np.ndarray) -> float:
+    v = np.asarray(values, dtype=np.float64)
+    if len(v) == 0:
+        return float("inf")
+    q = np.quantile(v, grid)
+    diff = q - target_q
+    return float(np.sqrt(np.mean(diff * diff)))
+
+
+def _fit_eta_transport_profile(
+    idx_ref: np.ndarray,
+    x_det: np.ndarray,
+    y_det: np.ndarray,
+    clf,
+    t_slices: list[tuple[int, int]],
+    n_components: int,
+    seed: int,
+    ref_max: int,
+    grid_size: int,
+) -> dict[str, np.ndarray]:
+    rng = np.random.default_rng(seed + 700000)
+    idx_ref = np.asarray(idx_ref, dtype=np.int64)
+    if len(idx_ref) > int(ref_max):
+        idx_ref = rng.choice(idx_ref, size=int(ref_max), replace=False)
+
+    delta_mat = np.zeros((len(idx_ref), n_components), dtype=np.float64)
+    for row, i in enumerate(idx_ref):
+        x = x_det[int(i)]
+        _yy, m0 = _margin(clf.logits(x))
+        for comp in range(n_components):
+            delta_mat[row, comp] = _delta_for_component(x, clf, m0, comp, t_slices)
+
+    y_ref = y_det[idx_ref].astype(int)
+    signed_effects = np.tanh(delta_mat)
+    risk_vals = signed_effects[y_ref == 1].reshape(-1)
+    if len(risk_vals) == 0:
+        risk_vals = signed_effects.reshape(-1)
+    normal_mask = y_ref == 0
+    if not np.any(normal_mask):
+        normal_mask = np.ones(len(y_ref), dtype=bool)
+
+    pred_delta = 0.5 * (
+        np.median(signed_effects[y_ref == 1], axis=0) if np.any(y_ref == 1) else np.median(signed_effects, axis=0)
+    ) + 0.5 * np.median(signed_effects[normal_mask], axis=0)
+    separation = np.abs(
+        (np.median(signed_effects[y_ref == 1], axis=0) if np.any(y_ref == 1) else np.median(signed_effects, axis=0))
+        - np.median(signed_effects[normal_mask], axis=0)
+    )
+    grid = np.linspace(0.05, 0.95, max(5, int(grid_size)))
+    target_q = np.quantile(risk_vals, grid)
+    cold_order = np.argsort(-separation)
+    return {
+        "pred_delta": np.asarray(pred_delta, dtype=np.float64),
+        "target_q": np.asarray(target_q, dtype=np.float64),
+        "grid": np.asarray(grid, dtype=np.float64),
+        "cold_order": np.asarray(cold_order, dtype=np.int64),
+    }
+
+
+def _eta_next_component(observed: list[float], remaining: list[int], eta_profile: dict[str, np.ndarray]) -> int:
+    if not observed:
+        return int(eta_profile["cold_order"][0])
+    pred_delta = eta_profile["pred_delta"]
+    target_q = eta_profile["target_q"]
+    grid = eta_profile["grid"]
+    best_comp = int(remaining[0])
+    best_dist = float("inf")
+    base = np.asarray(observed, dtype=np.float64)
+    for comp in remaining:
+        vals = np.append(base, pred_delta[int(comp)])
+        dist = _w2_quantile_distance(vals, target_q, grid)
+        if dist < best_dist:
+            best_dist = dist
+            best_comp = int(comp)
+    return best_comp
+
+
 def _delta_for_component(x: np.ndarray, clf, m0: float, comp: int, t_slices: list[tuple[int, int]]) -> float:
     n_bins = len(t_slices)
     c, b = _component_decode(int(comp), n_bins)
@@ -281,6 +376,7 @@ def _early_stop_scores(
     min_q: int,
     order_fn,
     trace_prefix: str,
+    eta_profile: dict[str, np.ndarray] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, list[dict[str, float | int | str]]]:
     scores = []
     q_used = []
@@ -289,13 +385,21 @@ def _early_stop_scores(
         x = x_det[i]
         y = int(y_det[i])
         _yy, m0 = _margin(clf.logits(x))
-        order = order_fn(int(i), x)
+        order = order_fn(int(i), x) if eta_profile is None else None
         d = np.zeros(n_components, dtype=np.float64)
         prev = None
         hist = []
         used = 0
-        for k, comp in enumerate(order[:q_max], start=1):
+        observed: list[float] = []
+        remaining = list(range(n_components))
+        for k in range(1, q_max + 1):
+            if eta_profile is None:
+                comp = int(order[k - 1])
+            else:
+                comp = _eta_next_component(observed, remaining, eta_profile)
+                remaining.remove(int(comp))
             d[int(comp)] = _delta_for_component(x, clf, m0, int(comp), t_slices)
+            observed.append(float(np.tanh(d[int(comp)])))
             vec = _build_vector(
                 d,
                 margin=m0,
@@ -402,6 +506,21 @@ def main() -> None:
 
     global_channel_means = np.mean(x_train, axis=(0, 1)).astype(np.float32)
 
+    eta_profile = None
+    if args.order_mode == "eta_transport":
+        print("Fitting ETA transport profile on validation detections...")
+        eta_profile = _fit_eta_transport_profile(
+            va,
+            x_det,
+            y_det,
+            clf,
+            t_slices,
+            n_components,
+            args.seed,
+            args.eta_ref_max,
+            args.eta_grid,
+        )
+
     prefix_values = [
         int(v.strip())
         for v in args.policy_prefix_list.split(",")
@@ -419,11 +538,22 @@ def main() -> None:
         x = x_det[i]
         y = int(y_det[i])
         _yy, m0 = _margin(clf.logits(x))
-        order = _adaptive_order(x, t_slices, q_max, channel_means=global_channel_means)
         d = np.zeros(n_components, dtype=np.float64)
         prefix_set = set(prefix_values)
-        for k, comp in enumerate(order[:q_max], start=1):
+        observed: list[float] = []
+        remaining = list(range(n_components))
+        if eta_profile is None:
+            order = _adaptive_order(x, t_slices, q_max, channel_means=global_channel_means)
+        else:
+            order = None
+        for k in range(1, q_max + 1):
+            if eta_profile is None:
+                comp = int(order[k - 1])
+            else:
+                comp = _eta_next_component(observed, remaining, eta_profile)
+                remaining.remove(int(comp))
             d[int(comp)] = _delta_for_component(x, clf, m0, int(comp), t_slices)
+            observed.append(float(np.tanh(d[int(comp)])))
             if k in prefix_set:
                 rows_full.append(
                     _build_vector(
@@ -466,6 +596,7 @@ def main() -> None:
         args.min_q,
         adaptive_order_fn,
         "beacon_early_stop",
+        eta_profile=eta_profile,
     )
 
     q_mean = int(max(1, round(float(np.mean(q_used)))))
@@ -605,6 +736,9 @@ def main() -> None:
                 "model_source": str(model_source),
                 "policy_train_mode": str(args.policy_train_mode),
                 "policy_prefix_list": [int(v) for v in prefix_values],
+                "order_mode": str(args.order_mode),
+                "eta_ref_max": int(args.eta_ref_max),
+                "eta_grid": int(args.eta_grid),
             },
             f,
             ensure_ascii=False,
