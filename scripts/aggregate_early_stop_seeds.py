@@ -9,10 +9,14 @@ import pandas as pd
 
 
 METRIC_COLS = [
+    "delta_auroc",
+    "delta_auprc",
+    "delta_f1_10",
     "delta_auroc_vs_uniform_early_stop",
     "delta_auprc_vs_uniform_early_stop",
     "delta_f1_10_vs_uniform_early_stop",
     "q_mean_early",
+    "q_equal_uniform",
     "q_mean_uniform_early_stop",
 ]
 
