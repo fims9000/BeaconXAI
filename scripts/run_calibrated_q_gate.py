@@ -53,13 +53,18 @@ def evaluate_split(x_train, y_train, x_eval, y_eval, sid_eval, *, seed, trees,
         raise ValueError("no injected examples")
     injected, targets, subjects = injected[ix], target[ix], sid_eval[ix]
 
+    # Inner training may omit an activity found in validation. Align model
+    # scores to the global activity IDs before selecting top-1/top-2.
+    n_classes = int(max(np.max(y_train), np.max(y_eval))) + 1
+    trained_classes = np.asarray(model.model.classes_, dtype=int)
+
     def predict_many(batch):
         raw = model.model.predict_proba(_anfis_features(np.asarray(batch)))
-        return np.log(np.clip(raw, 1e-12, 1))
+        full = np.full((len(raw), n_classes), 1e-12, dtype=float)
+        full[:, trained_classes] = raw
+        return np.log(np.clip(full, 1e-12, 1))
 
     base = predict_many(injected)  # one shared cached baseline per example
-    if not np.array_equal(model.model.classes_, np.arange(base.shape[1])):
-        raise ValueError("training model classes not contiguous: update score mapping")
     rows = []
     for i, x in enumerate(injected):
         a = int(np.argmax(base[i]))
