@@ -70,7 +70,10 @@ def test_model_call_count_exact_for_each_method():
             method, x, comps, profiles, counting, baseline, 16, seed=51
         )
         assert billed == calls[0] == (0 if method.endswith("_q0") else 16)
-        assert len(rank) == (36 if billed == 0 else 16)
+        # Mask-regression methods infer all M coefficients from Q coalitions;
+        # direct occlusion methods can rank only Q individually probed components.
+        expected = 36 if billed == 0 or method in ("rise_like_q16", "kernelshap_like_q16") else 16
+        assert len(rank) == expected
         assert len(set(rank)) == len(rank)
 
 
