@@ -33,6 +33,8 @@ jobs:
       max-parallel: 1
       matrix:
         include:
+          - heldout: '1'
+            tag: 's1'
           - heldout: '2,3'
             tag: 's2s3'
           - heldout: '4,5'
