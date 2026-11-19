@@ -60,3 +60,41 @@ LIMITATIONS
 CLAIM STATUS
 This is exploratory code and local tests. Real PAMAP2 scientific results are
 not available until the dataset is downloaded and the runner is executed.
+
+\n\nCLASS-PROTOTYPE INTERVENTION ATLAS (PAMAP2)
+====================================================
+Code: beaconxai/class_counterfactual.py
+Runner: scripts/run_class_counterfactual_atlas.py
+Tests: tests/test_class_counterfactual.py
+Automated experiment: .github/workflows/pamap2_class_counterfactual.yml
+
+python -m pip install -e . matplotlib pytest
+python -m pytest -q tests/test_class_counterfactual.py
+python scripts/run_class_counterfactual_atlas.py --npz-path data/pamap2_acc9_w200s100_p095.npz --budget 16 --prototype-mode both --rival-mode all --max-examples-per-class 2 --out-dir outputs_composite/class_counterfactual_atlas
+
+Training-only mean and median templates are fitted per class/time/channel.
+For every source and rival pair, Q16 = 4 selected components *
+2 replacement classes (source/rival) * 2 prototype kinds (mean/median).
+One cached baseline model prediction per example is counted separately.
+For a wider search choose --prototype-mode mean or median: Q16 then
+checks 8 components, still counting 16 perturbed examples per class pair.
+
+RESULT FILES
+  per_intervention.csv : before/after model scores, signed probability and margin deltas, actual predicted class
+  pair_summary.csv     : average effects for each source/rival and prototype kind
+  component_summary.csv: per source/rival/sensor/time-bin aggregation
+  class_atlas.csv      : descriptive per-class coverage and directed fractions
+  report.md            : user-readable class-by-class explanations
+  plots/*.png          : paired-class score heatmaps and signal/prototype overlays
+  manifest.json        : checksum, query cost, offline prototype memory, class coverage
+
+Two visual maps represent model p(source) and p(rival) separately; gray means
+component was not evaluated. Negative changes to original class are NOT
+automatically evidence in favor of the rival. Directed movement requires
+p(source) to fall AND p(rival) to rise; actual class-switch is separately recorded.
+
+NOTE: The prototype intervention is NOT guaranteed to be a realizable
+physical time series. Mean/median smoothing can create out-of-distribution
+artifacts. Atlas summaries are descriptive and depend on the classifier,
+training classes, and chosen held-out participants. These are not class
+definitions or calibrated uncertainty probabilities.
