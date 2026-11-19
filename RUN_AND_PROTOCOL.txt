@@ -1,0 +1,62 @@
+BEACON Contrastive Q16 -- research prototype (not validated PAMAP2 results)
+
+PURPOSE
+Compare class-conditional low-cost component preselection against uniform
+occlusion, RISE-like masking, KernelSHAP-like weighted ridge, and zero-query
+class-profile prior using 16 ADDITIONAL model evaluations per example.
+
+FILES
+  beaconxai/contrastive.py
+  scripts/run_contrastive_q16.py
+  tests/test_contrastive.py
+
+QUICK TEST
+  python -m pytest tests/test_contrastive.py -q
+  python scripts/run_contrastive_q16.py --smoke
+
+DATA PREPARATION (downloads official PAMAP2 data)
+  python scripts/preprocess_pamap2.py --data-root data --window-length 200 --step 100 --min-purity 0.95 --test-subjects 8,9 --out data/pamap2_acc9_w200s100_p095.npz
+
+EQUAL-BUDGET LOCALIZATION AND CLASS-PAIR PROBE
+  python scripts/run_contrastive_q16.py --mode both --time-bins 12 --budget 16 --max-test 128 --repeats 5
+
+WALKING VS RUNNING (class codes 3 and 4 under preprocess_pamap2.py)
+  python scripts/run_contrastive_q16.py --mode boundary --source-class 3 --target-class 4 --time-bins 12 --budget 16 --max-test 256 --repeats 5
+
+RESULTS
+  outputs_composite/contrastive_q16/summary.csv
+  outputs_composite/contrastive_q16/summary.json
+  outputs_composite/contrastive_q16/per_sample.csv
+  outputs_composite/contrastive_q16/boundary_summary.json
+  outputs_composite/contrastive_q16/boundary_per_sample.csv
+
+BUDGET PROTOCOL
+One shared original model evaluation is cached. Q=16 counts 16 additional
+evaluated perturbations for each method. Training class profiles use TRAIN
+only and their memory and CPU cost must be measured separately.
+
+EVALUATION
+PAMAP2 injected component localization: hit@1, hit@3, hit@5, MRR, rank.
+Model decision probe: fixed A versus B score-gap reduction and observed
+flip to target B. Compare methods on exactly the same examples, perturbation
+operator, componentization, seeds, and query budgets. Aggregate repeated
+seeds by original example before bootstrapping; examine subject dependence.
+
+LIMITATIONS
+- No real PAMAP2 equal-budget Q16 RISE/KernelSHAP numbers are included.
+- RISE-like and KernelSHAP-like are regularized mask regression variants,
+  NOT exact implementations or exact Shapley values. With M=36 and Q=16,
+  the linear fit is underdetermined.
+- Synthetic injected-patch localization does not validate real-world
+  explanatory or causal correctness.
+- TRAIN class mean patches may be physically implausible; crossing a model
+  boundary does not imply crossing a physical activity boundary.
+- ExtraTrees on engineered statistics has strong rule/TreeSHAP baselines.
+- This patch does not produce validated global class prototypes or rules.
+- The method is motivated by TinyML but microcontroller testing is not done.
+- Do not assert superiority over LIME, RISE, KernelSHAP, TreeSHAP or ExtraTrees
+  rules without honest matched protocols and statistical analysis.
+
+CLAIM STATUS
+This is exploratory code and local tests. Real PAMAP2 scientific results are
+not available until the dataset is downloaded and the runner is executed.
