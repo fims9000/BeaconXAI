@@ -180,19 +180,32 @@ def explain_class_pair(
 
 def describe_intervention(r: dict, class_names: dict[int, str],
                           sensor_names: Sequence[str] = ("wrist", "chest", "ankle")) -> str:
-    """Report only observed model behavior, not speculative physiology."""
+    """State BOTH class score effects and actual new predicted class, not an inferred cause."""
     a, b, c = r["source"], r["rival"], r["prototype_class"]
     sensor = sensor_names[r["group"]] if r["group"] < len(sensor_names) else f"sensor {r['group']}"
-    signed = r["delta_p_rival"] * 100
-    verb = "выросла" if signed > 0 else "уменьшилась" if signed < 0 else "не изменилась"
-    outcome = ("модель переключилась на " + class_names.get(b, str(b))
-               if r["flip_to_rival"] else "перехода к конкурирующему классу не произошло")
+    ppa = r["delta_p_source"] * 100
+    ppb = r["delta_p_rival"] * 100
+    kind = "средний" if r["prototype_kind"] == "mean" else "медианный"
+    new_cls = int(r["predicted_after"])
+    if new_cls == a:
+        outcome = "исходный класс остался первым"
+    elif new_cls == b:
+        outcome = f"модель переключилась на конкурента «{class_names.get(b,str(b))}»"
+    else:
+        outcome = (f"модель переключилась на третий класс "
+                   f"«{class_names.get(new_cls,str(new_cls))}»")
+    directed = (ppa < -1e-9 and ppb > 1e-9)
+    interpretation = ("обе оценки изменились в сторону конкурента" if directed else
+                      "направленное смещение к конкуренту НЕ подтверждено")
     return (
-        f"{sensor}, отсчёты {r['t0']}–{r['t1']}: замена на "
-        f"{r['prototype_kind']}-прототип класса «{class_names.get(c, str(c))}» "
-        f"изменяет оценку класса «{class_names.get(b, str(b))}»: "
+        f"{sensor}, отсчёты {r['t0']}–{r['t1']}: подставили {kind} прототип "
+        f"класса «{class_names.get(c,str(c))}». "
+        f"Оценка «{class_names.get(a,str(a))}»: "
+        f"{r['p_source_before']*100:.1f}% → {r['p_source_after']*100:.1f}% "
+        f"({ppa:+.1f} п.п.); "
+        f"оценка «{class_names.get(b,str(b))}»: "
         f"{r['p_rival_before']*100:.1f}% → {r['p_rival_after']*100:.1f}% "
-        f"({signed:+.1f} п.п.; оценка {verb}). Изменение отступа "
-        f"«{class_names.get(a, str(a))}» против «{class_names.get(b, str(b))}»: "
-        f"{r['delta_gap']:+.3f}; {outcome}."
+        f"({ppb:+.1f} п.п.). "
+        f"Изменение фиксированного отступа A–B: {r['delta_gap']:+.3f}; "
+        f"{outcome}; {interpretation}."
     )
