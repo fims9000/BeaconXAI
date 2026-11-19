@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT))
 from beaconxai.contrastive import make_components, fit_class_profiles
 from beaconxai.subject_sampling import balanced_subject_sample, inject_subject_balanced
 from beaconxai.query_gate import cheap_gate_features, fit_query_gate, evaluate_gate
+from beaconxai.selective_audit import run_selective_audit
 from scripts.run_q16_matched_ablation import class_cheap, best_q, evaluate_selected, write_csv
 from scripts.run_component_conflict_benchmark import (
     _anfis_features, _train_extratrees_local
@@ -29,7 +30,7 @@ from beaconxai.datasets import fit_channel_standardizer, apply_standardizer
 
 
 def evaluate_split(x_train, y_train, x_eval, y_eval, sid_eval, *, seed, trees,
-                   q, time_bins, max_test):
+                   q, time_bins, max_test, gate=None):
     """Train on x_train only; select/query with no evaluation labels."""
     if len(np.unique(y_eval)) < 2:
         raise ValueError("cannot make different-class injected controls")
@@ -76,16 +77,44 @@ def evaluate_split(x_train, y_train, x_eval, y_eval, sid_eval, *, seed, trees,
         a = int(np.argmax(base[i]))
         cheap = class_cheap(x, profiles[a][0], comps)[2]
         prior_order = np.argsort(-cheap, kind="stable").astype(int).tolist()
-        selected = best_q(cheap, q)
-        # The original BEACON adaptive_v2, with moving top-two margin.
-        queried_order = evaluate_selected(x, comps, selected, predict_many,
-                                          base[i], a, 0, scoring="moving")
         gold = int(targets[i])
         features = cheap_gate_features(base[i], cheap)
+        # The inference path runs BEFORE the held-out oracle is inspected.
+        # A Q0 choice sends NO perturbed examples to the classifier.
+        audit = (run_selective_audit(x, comps, cheap, predict_many, gate, base[i])
+                 if gate is not None else None)
+        if audit is None:
+            selected = best_q(cheap, q)
+            queried_order = evaluate_selected(x, comps, selected, predict_many,
+                                              base[i], a, 0, scoring="moving")
+            gate_order = queried_order
+            actual_gate_queries = q
+            offline_control_queries = 0
+            audit_wall_ms = None
+        elif audit.extra_model_evaluations:
+            queried_order = audit.ranking
+            gate_order = audit.ranking
+            actual_gate_queries = audit.extra_model_evaluations
+            offline_control_queries = 0
+            audit_wall_ms = audit.audit_wall_ms
+        else:
+            # OFFLINE matched Q16 control, evaluated only AFTER the Q0 gate
+            # decision. These are NOT part of the deployment Q0 budget.
+            gate_order = audit.ranking
+            selected = best_q(cheap, q)
+            queried_order = evaluate_selected(x, comps, selected, predict_many,
+                                              base[i], a, 0, scoring="moving")
+            actual_gate_queries = 0
+            offline_control_queries = q
+            audit_wall_ms = 0.0
         rows.append({"sample": i, "original_window_index": int(chosen[ix[i]]),
-                     "subject": int(subjects[i]),
-                     **features, "hit3_q0": int(gold in prior_order[:3]),
+                     "subject": int(subjects[i]), **features,
+                     "hit3_q0": int(gold in prior_order[:3]),
                      "hit3_q16": int(gold in queried_order[:3]),
+                     "gate_hit3": int(gold in gate_order[:3]),
+                     "actual_gate_queries": actual_gate_queries,
+                     "offline_control_queries": offline_control_queries,
+                     "audit_model_wall_ms": audit_wall_ms,
                      "true_component_for_offline_evaluation": gold})
     return rows
 
@@ -120,14 +149,18 @@ def run(args):
     outer_rows = evaluate_split(
         xt, yt, xv, yv, sv, seed=args.seed+7919,
         trees=args.trees, q=args.budget, time_bins=args.time_bins,
-        max_test=args.max_test
+        max_test=args.max_test, gate=gate
     )
     outer_summary, per_subject = evaluate_gate(
         outer_rows, gate, cost_per_full_budget=args.lambda_cost
     )
     for row in outer_rows:
         row["gate_queries"] = args.budget if gate.should_query(row) else 0
-        row["gate_hit3"] = row["hit3_q16"] if row["gate_queries"] else row["hit3_q0"]
+        if row["actual_gate_queries"] != row["gate_queries"]:
+            raise AssertionError("inference budget diverged from prospective gate")
+        expected = row["hit3_q16"] if row["gate_queries"] else row["hit3_q0"]
+        if row["gate_hit3"] != expected:
+            raise AssertionError("prospective gate changed ranking semantics")
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     write_csv(out/"outer_per_sample.csv", outer_rows)
@@ -143,16 +176,20 @@ def run(args):
                 "inner_training_subjects": [s for s in train_subjects if s not in inner_subjects],
                 "chosen_gate": gate.to_dict(), "calibration": calibration,
                 "outer": outer_summary, "q_additional": args.budget,
+                "prospective_extra_model_evaluations": int(sum(r["actual_gate_queries"] for r in outer_rows)),
+                "offline_control_model_evaluations": int(sum(r["offline_control_queries"] for r in outer_rows)),
+                "prospective_queries_confirmed_against_gate": True,
                 "label_and_injected_location_not_passed_to_gate": True,
                 "calibration_independent_of_outer_subjects": True,
                 "offline_full_Q_for_all_test_cases": True,
+                "prospective_execution": "Q0 cases physically skip all perturbation evaluations; matched Q16 controls execute separately after the decision",
                 "quality_endpoint": "hit@3 of artificially injected donor-class component",
                 "limitations": [
                     "The gate estimates synthetic patch localization; not expert explanation correctness",
                     "Outer test outcomes must never be used to alter the gate",
                     "Windows overlap within subject; these are descriptive per-subject statistics",
                     "No latency, energy, or MCU RAM measured",
-                    "Query savings are simulated after offline paired full-Q evaluation",
+                    "Selective-stage query counts are executed, but offline Q16 controls are also evaluated for honest comparison",
                     "Inner validation has only two subjects and may not generalize"
                 ]}
     (out/"manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf8")
