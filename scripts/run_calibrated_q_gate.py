@@ -58,8 +58,11 @@ def evaluate_split(x_train, y_train, x_eval, y_eval, sid_eval, *, seed, trees,
 
     # Inner training may omit an activity found in validation. Align model
     # scores to the global activity IDs before selecting top-1/top-2.
-    n_classes = int(max(np.max(y_train), np.max(y_eval))) + 1
+    # Class-score dimensions depend only on the fitted classifier.
+    # Held-out true labels may construct OFFLINE injections, but must never
+    # determine the output class space used by the gate.
     trained_classes = np.asarray(model.model.classes_, dtype=int)
+    n_classes = int(trained_classes.max()) + 1
 
     def predict_many(batch):
         raw = model.model.predict_proba(_anfis_features(np.asarray(batch)))
