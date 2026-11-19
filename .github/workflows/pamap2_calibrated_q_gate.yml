@@ -11,6 +11,8 @@ on:
       - 'tests/test_query_gate.py'
       - 'beaconxai/subject_sampling.py'
       - 'tests/test_subject_sampling.py'
+      - 'beaconxai/selective_audit.py'
+      - 'tests/test_selective_audit.py'
   workflow_dispatch:
 
 permissions:
@@ -40,7 +42,7 @@ jobs:
       - name: Install package and tests
         run: python -m pip install -e . pytest
       - name: Run Q0/Q16 gate tests
-        run: python -m pytest -q tests/test_query_gate.py tests/test_subject_sampling.py tests/test_q16_matched_ablation.py
+        run: python -m pytest -q tests/test_query_gate.py tests/test_subject_sampling.py tests/test_selective_audit.py tests/test_q16_matched_ablation.py
       - name: Prepare held-out subject pair
         run: |
           python scripts/preprocess_pamap2.py \
