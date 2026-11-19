@@ -19,10 +19,11 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from beaconxai.contrastive import make_components, fit_class_profiles
+from beaconxai.subject_sampling import balanced_subject_sample, inject_subject_balanced
 from beaconxai.query_gate import cheap_gate_features, fit_query_gate, evaluate_gate
 from scripts.run_q16_matched_ablation import class_cheap, best_q, evaluate_selected, write_csv
 from scripts.run_component_conflict_benchmark import (
-    _anfis_features, _train_extratrees_local, _inject_component_conflicts
+    _anfis_features, _train_extratrees_local
 )
 from beaconxai.datasets import fit_channel_standardizer, apply_standardizer
 
@@ -37,20 +38,22 @@ def evaluate_split(x_train, y_train, x_eval, y_eval, sid_eval, *, seed, trees,
     xv = apply_standardizer(x_eval, mu, std)
     model = _train_extratrees_local(xt, y_train, trees, .7, 1)
     profiles = fit_class_profiles(xt, y_train)
-    if max_test > 0 and max_test < len(xv):
-        chosen = np.random.default_rng(seed).choice(len(xv), max_test, replace=False)
-        xv, y_eval, sid_eval = xv[chosen], y_eval[chosen], sid_eval[chosen]
+    candidate_subjects = set(map(int, np.unique(sid_eval)))
+    chosen = balanced_subject_sample(sid_eval, max_test, seed)
+    xv, y_eval, sid_eval = xv[chosen], y_eval[chosen], sid_eval[chosen]
+    if set(map(int, np.unique(sid_eval))) != candidate_subjects:
+        raise AssertionError("subject disappeared in balanced sampling")
     comps = make_components(xv.shape[1:], time_bins, "pamap3")
     if q > len(comps) or q < 3:
         raise ValueError("invalid Q for hit@3")
-    groups = [(c.c0, c.c1) for c in comps if c.time_bin == 0]
-    times = [(c.t0, c.t1) for c in comps if c.group == 0]
-    injected, present, target = _inject_component_conflicts(
-        xv, y_eval, groups, times, .5, seed+101
+    injected, present, target = inject_subject_balanced(
+        xv, y_eval, sid_eval, comps, .5, seed+101
     )
     ix = np.flatnonzero(present)
     if not len(ix):
         raise ValueError("no injected examples")
+    if set(map(int, np.unique(sid_eval[ix]))) != candidate_subjects:
+        raise AssertionError("subject disappeared in synthetic injection")
     injected, targets, subjects = injected[ix], target[ix], sid_eval[ix]
 
     # Inner training may omit an activity found in validation. Align model
@@ -76,7 +79,8 @@ def evaluate_split(x_train, y_train, x_eval, y_eval, sid_eval, *, seed, trees,
                                           base[i], a, 0, scoring="moving")
         gold = int(targets[i])
         features = cheap_gate_features(base[i], cheap)
-        rows.append({"sample": i, "subject": int(subjects[i]),
+        rows.append({"sample": i, "original_window_index": int(chosen[ix[i]]),
+                     "subject": int(subjects[i]),
                      **features, "hit3_q0": int(gold in prior_order[:3]),
                      "hit3_q16": int(gold in queried_order[:3]),
                      "true_component_for_offline_evaluation": gold})
@@ -126,7 +130,12 @@ def run(args):
     write_csv(out/"outer_per_sample.csv", outer_rows)
     write_csv(out/"outer_per_subject.csv", per_subject)
     write_csv(out/"inner_calibration.csv", inner_rows)
+    outer_counts = {str(s): sum(int(r["subject"]) == s for r in outer_rows)
+                    for s in sorted(outer_subjects)}
     manifest = {"dataset": "PAMAP2", "npz_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "sampling": "round-robin subject sampling followed by stratified synthetic donor injections",
+                "outer_injected_windows_per_subject": outer_counts,
+                "single_example_subjects": [s for s, count in outer_counts.items() if count < 5],
                 "outer_subjects": sorted(outer_subjects), "inner_validation_subjects": inner_subjects,
                 "inner_training_subjects": [s for s in train_subjects if s not in inner_subjects],
                 "chosen_gate": gate.to_dict(), "calibration": calibration,
