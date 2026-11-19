@@ -9,6 +9,8 @@ on:
       - 'scripts/run_q16_matched_ablation.py'
       - 'beaconxai/subject_sampling.py'
       - 'tests/test_subject_sampling.py'
+      - 'beaconxai/rank_fusion.py'
+      - 'tests/test_rank_fusion.py'
   workflow_dispatch:
 
 permissions:
@@ -34,7 +36,7 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -e . pytest
       - name: Verify study code
-        run: python -m pytest tests/test_q16_matched_ablation.py tests/test_subject_sampling.py -q
+        run: python -m pytest tests/test_q16_matched_ablation.py tests/test_subject_sampling.py tests/test_rank_fusion.py -q
       - name: Prepare official PAMAP2 fold
         run: |
           python scripts/preprocess_pamap2.py \
