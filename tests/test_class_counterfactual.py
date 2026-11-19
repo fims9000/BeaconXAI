@@ -14,7 +14,7 @@ from beaconxai.class_counterfactual import (
 )
 from beaconxai.contrastive import make_components
 from scripts.run_class_counterfactual_atlas import (
-    gather_summary, select_cases, run, NAMES,
+    gather_summary, summarize_components, select_cases, run, NAMES,
 )
 
 
@@ -168,3 +168,49 @@ def test_real_runner_interface_on_toy_data_and_png_outputs(tmp_path,monkeypatch)
     assert (out/"plots/class_00_heatmap.png").is_file()
     assert (out/"plots/class_01_example.png").is_file()
     assert (out/"report.md").is_file()
+
+
+def test_directed_summary_requires_both_source_fall_and_rival_rise():
+    # A smaller source score alone is NOT sufficient contrastive evidence.
+    rows=[
+        {"sample_id":1,"source":0,"rival":1,"prototype_class":1,
+         "prototype_kind":"mean","group":2,"time_bin":3,
+         "delta_p_source":-.15,"delta_p_rival":0.0,"delta_gap":-.5,
+         "flip_to_rival":False},
+        {"sample_id":2,"source":0,"rival":1,"prototype_class":1,
+         "prototype_kind":"mean","group":2,"time_bin":3,
+         "delta_p_source":-.20,"delta_p_rival":.12,"delta_gap":-.6,
+         "flip_to_rival":True},
+    ]
+    coverage={
+        0:{"total_test_labeled":2,"eligible_correct_test":2},
+        1:{"total_test_labeled":0,"eligible_correct_test":0},
+    }
+    atlas,pairs=gather_summary(rows,[0,1],coverage)
+    assert atlas[0]["target_mean_directed_fraction"]==.5
+    assert pairs[0]["directed_fraction"]==.5
+    comp=summarize_components(rows)
+    assert len(comp)==1
+    assert comp[0]["n_examples"]==2
+    assert comp[0]["directed_fraction"]==.5
+    assert atlas[1]["status"]=="no_correct_test_examples"
+
+
+def test_user_text_must_report_other_class_switch():
+    row={
+        "source":0,"rival":1,"prototype_class":1,"prototype_kind":"mean",
+        "group":0,"t0":10,"t1":20,
+        "p_source_before":.6,"p_source_after":.2,
+        "p_rival_before":.2,"p_rival_after":.1,
+        "delta_p_source":-.4,"delta_p_rival":-.1,
+        "delta_gap":-.3,"predicted_after":2,"flip_to_rival":False,
+    }
+    text=describe_intervention(row,{0:"walking",1:"running",2:"cycling"})
+    assert "третий класс" in text
+    assert "cycling" in text
+    assert "НЕ подтверждено" in text
+    row["delta_p_rival"] = .1
+    row["predicted_after"] = 1
+    text=describe_intervention(row,{0:"walking",1:"running",2:"cycling"})
+    assert "модель переключилась" in text
+    assert "обе оценки изменились" in text
