@@ -167,6 +167,7 @@ def _plot_local_case(x: np.ndarray, bank, components,
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    output.mkdir(parents=True, exist_ok=True)
     candidates = [r for r in rows if r["source"] == source and r["rival"] == rival and
                   r["prototype_class"] == rival and r["prototype_kind"] == "mean"]
     if not candidates:
