@@ -1,0 +1,69 @@
+name: PAMAP2 train-calibrated Q0-Q16 gate
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/pamap2_calibrated_q_gate.yml'
+      - 'beaconxai/query_gate.py'
+      - 'scripts/run_calibrated_q_gate.py'
+      - 'tests/test_query_gate.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  q-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - heldout: '2,3'
+            tag: s2s3
+          - heldout: '4,5'
+            tag: s4s5
+          - heldout: '6,7'
+            tag: s6s7
+          - heldout: '8,9'
+            tag: s8s9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install package and tests
+        run: python -m pip install -e . pytest
+      - name: Run Q0/Q16 gate tests
+        run: python -m pytest -q tests/test_query_gate.py tests/test_q16_matched_ablation.py
+      - name: Prepare held-out subject pair
+        run: |
+          python scripts/preprocess_pamap2.py \
+            --data-root data --window-length 200 --step 100 \
+            --min-purity 0.95 --test-subjects '${{ matrix.heldout }}' \
+            --out data/pamap2_${{ matrix.tag }}.npz
+      - name: Fit on inner subjects and evaluate untouched outer pair
+        run: |
+          python -u scripts/run_calibrated_q_gate.py \
+            --npz-path data/pamap2_${{ matrix.tag }}.npz \
+            --out-dir outputs_composite/calibrated_gate_${{ matrix.tag }} \
+            --max-test 128 --budget 16 --lambda-cost 0.05 --seed 42
+      - name: Record provenance
+        if: always()
+        run: |
+          mkdir -p outputs_composite/calibrated_gate_${{ matrix.tag }}
+          {
+            git rev-parse HEAD
+            python --version
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pandas|pytest'
+          } > outputs_composite/calibrated_gate_${{ matrix.tag }}/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: calibrated-q-gate-${{ matrix.tag }}
+          path: outputs_composite/calibrated_gate_${{ matrix.tag }}/
+          if-no-files-found: warn
+          retention-days: 30
