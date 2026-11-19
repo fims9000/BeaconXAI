@@ -11,6 +11,8 @@ on:
       - 'beaconxai/subject_sampling.py'
       - 'tests/test_query_gate.py'
       - 'tests/test_subject_sampling.py'
+      - 'beaconxai/selective_audit.py'
+      - 'tests/test_selective_audit.py'
   workflow_dispatch:
 
 permissions:
@@ -40,7 +42,7 @@ jobs:
       - name: Install project
         run: python -m pip install -e . pytest
       - name: Test subject separation and budget accounting
-        run: python -m pytest -q tests/test_query_gate.py tests/test_subject_sampling.py tests/test_q16_matched_ablation.py
+        run: python -m pytest -q tests/test_query_gate.py tests/test_subject_sampling.py tests/test_selective_audit.py tests/test_q16_matched_ablation.py
       - name: Prepare official data once per outer fold
         run: |
           python scripts/preprocess_pamap2.py \
