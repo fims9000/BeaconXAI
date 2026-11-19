@@ -30,6 +30,7 @@ from beaconxai.contrastive import (
     _order_from_prior, contrastive_prior, fit_class_profiles,
     make_components, neutralize_interp,
 )
+from beaconxai.subject_sampling import balanced_subject_sample, inject_subject_balanced
 from scripts.run_adaptive_v2_localization import _component_cheap_scores
 from scripts.run_contrastive_q16 import mask_ranking, ranking_metrics
 
@@ -213,9 +214,9 @@ def run(args):
     mu, sigma = fit_channel_standardizer(x_train)
     x_train, x_test = (apply_standardizer(x_train, mu, sigma),
                        apply_standardizer(x_test, mu, sigma))
-    if args.max_test > 0 and args.max_test < len(x_test):
-        chosen = np.random.default_rng(args.seed).choice(len(x_test), args.max_test, replace=False)
-        x_test, y_test, subject_test = x_test[chosen], y_test[chosen], subject_test[chosen]
+    all_subjects = set(map(int, np.unique(subject_test)))
+    chosen = balanced_subject_sample(subject_test, args.max_test, args.seed)
+    x_test, y_test, subject_test = x_test[chosen], y_test[chosen], subject_test[chosen]
     if len(np.unique(y_test)) < 2:
         raise ValueError("Need at least two different test activities for injected contrasts")
 
@@ -226,15 +227,14 @@ def run(args):
     components = make_components(x_test.shape[1:], args.time_bins, "pamap3")
     if args.budget > len(components):
         raise ValueError("Q exceeds component count")
-    groups = [(c.c0, c.c1) for c in components if c.time_bin == 0]
-    times = [(c.t0, c.t1) for c in components if c.group == 0]
-
-    x_eval, is_injected, true_components = _inject_component_conflicts(
-        x_test, y_test, groups, times, args.conflict_ratio, args.seed+101
+    x_eval, is_injected, true_components = inject_subject_balanced(
+        x_test, y_test, subject_test, components, args.conflict_ratio, args.seed+101
     )
     injected_idx = np.flatnonzero(is_injected)
     if not len(injected_idx):
         raise ValueError("No injected windows produced")
+    if set(map(int, np.unique(subject_test[injected_idx]))) != all_subjects:
+        raise AssertionError("Subject omitted by balanced synthetic injection")
     x_eval = x_eval[injected_idx]
     y_truth = true_components[injected_idx]
     subject_eval = subject_test[injected_idx]
@@ -257,7 +257,9 @@ def run(args):
                     raise AssertionError("Incorrect model-evaluation accounting")
                 met = ranking_metrics(ordering, int(y_truth[i]), len(components))
                 rows.append({
-                    "trial": trial, "sample": i, "subject": int(subject_eval[i]),
+                    "trial": trial, "sample": i,
+                    "original_window_index": int(chosen[injected_idx[i]]),
+                    "subject": int(subject_eval[i]),
                     "method": method, "true_component": int(y_truth[i]),
                     "extra_model_evaluations": q_used,
                     "runtime_ms": 1000.0 * elapsed,
@@ -276,6 +278,10 @@ def run(args):
         "model": "ExtraTrees(120) on _anfis_features; source script's seed=42",
         "train_time_sec": train_sec, "test_subjects": sorted(set(subject_eval.tolist())),
         "n_injected_windows": len(x_eval), "n_test_sampled": len(x_test),
+        "sampling": "round-robin subject balance with subject-stratified synthetic patch injection",
+        "per_subject_injected_windows": {
+            str(s): int(np.sum(subject_eval == s)) for s in sorted(all_subjects)
+        },
         "M": len(components), "time_bins": args.time_bins,
         "q_additional": args.budget, "baseline_cached_per_window": 1,
         "subject_dependence_warning": "Per-subject descriptive only; two subjects do not support generalization inference",
