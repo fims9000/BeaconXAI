@@ -31,6 +31,7 @@ from beaconxai.contrastive import (
     make_components, neutralize_interp,
 )
 from beaconxai.subject_sampling import balanced_subject_sample, inject_subject_balanced
+from beaconxai.rank_fusion import fuse_tested_ranks
 from scripts.run_adaptive_v2_localization import _component_cheap_scores
 from scripts.run_contrastive_q16 import mask_ranking, ranking_metrics
 
@@ -38,6 +39,7 @@ from scripts.run_contrastive_q16 import mask_ranking, ranking_metrics
 METHODS = (
     "adaptive_v2_original_q16",
     "adaptive_v2_fixed_pair_q16",
+    "adaptive_v2_fused_q16",
     "contrastive_q16",
     "uniform_q16",
     "rise_like_q16",
@@ -115,8 +117,11 @@ def evaluate_one_method(method: str, x: np.ndarray, components, profiles,
             ranking = np.argsort(-combined, kind="stable").astype(int).tolist()
             return ranking, 0, time.perf_counter() - t0
         selected = best_q(combined, q)
-        scoring = "moving" if method == "adaptive_v2_original_q16" else "fixed"
+        scoring = "moving" if method in ("adaptive_v2_original_q16",
+                                          "adaptive_v2_fused_q16") else "fixed"
         ranking = evaluate_selected(x, components, selected, predict_many, baseline, a, b, scoring)
+        if method == "adaptive_v2_fused_q16":
+            ranking = fuse_tested_ranks(combined, ranking, prior_weight=0.5)
         return ranking, q, time.perf_counter() - t0
 
     if method.startswith("contrastive"):
@@ -293,6 +298,7 @@ def run(args):
         },
         "scoring": {
             "adaptive_v2_original_q16": "abs(margin_original - recomputed_top2_margin_after)",
+            "adaptive_v2_fused_q16": "fixed weight 0.5 rank fusion: cheap prior and moving Q16 scores, among Q queried candidates only",
             "adaptive_v2_fixed_pair_q16": "abs((score_a-score_b)_original - (score_a-score_b)_after)",
             "contrastive_q16": "fixed original class pair as previous experiment",
             "other_mask_methods": "regularized masking controls, not official SHAP / RISE",
