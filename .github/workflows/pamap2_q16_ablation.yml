@@ -10,6 +10,8 @@ on:
       - 'tests/test_q16_matched_ablation.py'
       - 'beaconxai/subject_sampling.py'
       - 'tests/test_subject_sampling.py'
+      - 'beaconxai/rank_fusion.py'
+      - 'tests/test_rank_fusion.py'
   workflow_dispatch:
 
 permissions:
@@ -43,7 +45,7 @@ jobs:
 
       - name: Validate matched protocol and previous contrastive tests
         run: |
-          python -m pytest -q tests/test_q16_matched_ablation.py tests/test_contrastive.py tests/test_subject_sampling.py
+          python -m pytest -q tests/test_q16_matched_ablation.py tests/test_contrastive.py tests/test_subject_sampling.py tests/test_rank_fusion.py
 
       - name: Prepare PAMAP2 for held-out subjects
         run: |
