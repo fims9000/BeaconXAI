@@ -46,7 +46,8 @@ def test_train_only_class_mean_and_median():
 
 def test_low_count_class_excluded_and_invalid_inputs():
     x,y,cs=data()
-    with pytest.raises(ValueError,match="no training class"):\n        fit_prototype_bank(x,y,min_count=21)
+    with pytest.raises(ValueError,match="no training class"):
+        fit_prototype_bank(x,y,min_count=21)
 
     with pytest.raises(ValueError):
         fit_prototype_bank(x[:1],y)
