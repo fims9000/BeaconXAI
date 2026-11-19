@@ -38,12 +38,27 @@ def run(args):
     xv=apply_standardizer(xv,mu,std)
     comps=make_components(xv.shape[1:],args.time_bins,'pamap3')
     t0=time.perf_counter()
-    model=_train_extratrees_local(xt,yt,args.trees,.7,1)
+    if args.model=='extratrees':
+        clf=_train_extratrees_local(xt,yt,args.trees,.7,1)
+        classes=clf.model.classes_.astype(int)
+        def model_probability(batch):
+            return clf.model.predict_proba(_anfis_features(np.asarray(batch)))
+    elif args.model=='raw_mlp':
+        from sklearn.neural_network import MLPClassifier
+        clf=MLPClassifier(hidden_layer_sizes=(32,),alpha=.01,
+                          batch_size=128,max_iter=30,early_stopping=True,
+                          n_iter_no_change=6,random_state=args.seed)
+        clf.fit(xt.reshape(len(xt),-1),yt)
+        classes=clf.classes_.astype(int)
+        def model_probability(batch):
+            arr=np.asarray(batch)
+            return clf.predict_proba(arr.reshape(len(arr),-1))
+    else:
+        raise ValueError('unknown model')
     train_seconds=time.perf_counter()-t0
-    classes=model.model.classes_.astype(int)
     C=int(max(yt.max(),yv.max(),classes.max()))+1
     def p_many(batch):
-        ps=model.model.predict_proba(_anfis_features(np.asarray(batch)))
+        ps=model_probability(np.asarray(batch))
         z=np.full((len(batch),C),1e-12)
         z[:,classes]=ps
         return np.log(np.clip(z,1e-12,1))
@@ -109,7 +124,7 @@ def run(args):
     info=dict(dataset='PAMAP2',checksum=hashlib.sha256(path.read_bytes()).hexdigest(),
               test_subjects=sorted(map(int,np.unique(subjects))),
               selected_cases=len(samples),evaluated_cases=len(per_case)//2,
-              skipped_cases=skipped,classifier='ExtraTrees engineered features',
+              skipped_cases=skipped,classifier=args.model,baseline_test_accuracy=float(np.mean(preds==yv)),
               train_seconds=train_seconds,train_donor_memory_bytes=bank.bank_bytes,
               per_method_audit_budget=16,
               reference_donors_per_component=args.reference_donors,
@@ -158,6 +173,7 @@ def cli():
     p.add_argument('--reference-donors',type=int,default=8)
     p.add_argument('--epsilon',type=float,default=.01)
     p.add_argument('--taper',type=int,default=2)
+    p.add_argument('--model',choices=('extratrees','raw_mlp'),default='extratrees')
     p.add_argument('--trees',type=int,default=120)
     run(p.parse_args())
 
