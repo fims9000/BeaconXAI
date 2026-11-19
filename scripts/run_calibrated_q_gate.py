@@ -77,7 +77,6 @@ def evaluate_split(x_train, y_train, x_eval, y_eval, sid_eval, *, seed, trees,
         a = int(np.argmax(base[i]))
         cheap = class_cheap(x, profiles[a][0], comps)[2]
         prior_order = np.argsort(-cheap, kind="stable").astype(int).tolist()
-        gold = int(targets[i])
         features = cheap_gate_features(base[i], cheap)
         # The inference path runs BEFORE the held-out oracle is inspected.
         # A Q0 choice sends NO perturbed examples to the classifier.
@@ -107,6 +106,8 @@ def evaluate_split(x_train, y_train, x_eval, y_eval, sid_eval, *, seed, trees,
             actual_gate_queries = 0
             offline_control_queries = q
             audit_wall_ms = 0.0
+        # Oracle becomes visible only after all prospective decisions.
+        gold = int(targets[i])
         rows.append({"sample": i, "original_window_index": int(chosen[ix[i]]),
                      "subject": int(subjects[i]), **features,
                      "hit3_q0": int(gold in prior_order[:3]),
