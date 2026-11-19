@@ -75,89 +75,127 @@ def select_cases(x_test: np.ndarray, y_test: np.ndarray,
 
 
 def gather_summary(rows: list[dict], classes: list[int], coverage: dict):
-    """Descriptive averages only; source-class and target-specific effects separated."""
-    atlas = []
-    pairs = []
+    """Descriptive averages; a directed contrast requires source DOWN and rival UP."""
+    def directed(r):
+        return float(r["delta_p_source"] < -1e-9 and r["delta_p_rival"] > 1e-9)
+    atlas, pairs = [], []
     for a in classes:
-        rc = [r for r in rows if r["source"] == a]
-        target = [r for r in rc if r["prototype_class"] == r["rival"]]
-        mean_target = [r for r in target if r["prototype_kind"] == "mean"]
-        median_target = [r for r in target if r["prototype_kind"] == "median"]
-        n_cases = len({r["sample_id"] for r in rc})
+        source_rows = [r for r in rows if r["source"] == a]
+        target = [r for r in source_rows if r["prototype_class"] == r["rival"]]
+        means = [r for r in target if r["prototype_kind"] == "mean"]
+        medians = [r for r in target if r["prototype_kind"] == "median"]
+        def avg(arr, name):
+            return float(np.mean([r[name] for r in arr])) if arr else None
+        def directional_rate(arr):
+            return float(np.mean([directed(r) for r in arr])) if arr else None
         atlas.append({
             "class_id": a, "class_name": NAMES.get(a, str(a)),
             "test_labeled": coverage[a]["total_test_labeled"],
             "eligible_correct_test": coverage[a]["eligible_correct_test"],
-            "audited_examples": n_cases, "interventions": len(rc),
-            "target_mean_delta_margin": float(np.mean([r["delta_gap"] for r in mean_target]))
-                                        if mean_target else None,
-            "target_median_delta_margin": float(np.mean([r["delta_gap"] for r in median_target]))
-                                          if median_target else None,
-            "target_mean_delta_p_rival": float(np.mean([r["delta_p_rival"] for r in mean_target]))
-                                          if mean_target else None,
-            "target_median_delta_p_rival": float(np.mean([r["delta_p_rival"] for r in median_target]))
-                                            if median_target else None,
-            "target_prototype_flip_fraction": float(np.mean([r["flip_to_rival"] for r in target]))
-                                               if target else None,
-            "status": "observed" if rc else "no_correct_test_examples",
+            "audited_examples": len({r["sample_id"] for r in source_rows}),
+            "interventions": len(source_rows),
+            "target_mean_delta_margin": avg(means, "delta_gap"),
+            "target_median_delta_margin": avg(medians, "delta_gap"),
+            "target_mean_delta_p_source": avg(means, "delta_p_source"),
+            "target_mean_delta_p_rival": avg(means, "delta_p_rival"),
+            "target_median_delta_p_source": avg(medians, "delta_p_source"),
+            "target_median_delta_p_rival": avg(medians, "delta_p_rival"),
+            "target_mean_directed_fraction": directional_rate(means),
+            "target_median_directed_fraction": directional_rate(medians),
+            "target_prototype_flip_fraction": avg(target,"flip_to_rival"),
+            "status": "observed" if source_rows else "no_correct_test_examples",
         })
-    keys = sorted({(r["source"], r["rival"], r["prototype_class"], r["prototype_kind"])
+    keys = sorted({(r["source"],r["rival"],r["prototype_class"],r["prototype_kind"])
                    for r in rows})
-    for a, b, c, kind in keys:
-        selected = [r for r in rows if (r["source"], r["rival"],
-                    r["prototype_class"], r["prototype_kind"]) == (a, b, c, kind)]
+    for a,b,c,kind in keys:
+        arr = [r for r in rows if
+               (r["source"],r["rival"],r["prototype_class"],r["prototype_kind"]) ==
+               (a,b,c,kind)]
         pairs.append({
-            "source": a, "source_name": NAMES.get(a, str(a)),
-            "rival": b, "rival_name": NAMES.get(b, str(b)),
-            "prototype_class": c, "prototype_kind": kind,
-            "n_interventions": len(selected),
-            "n_examples": len({r["sample_id"] for r in selected}),
-            "mean_delta_p_source": float(np.mean([r["delta_p_source"] for r in selected])),
-            "mean_delta_p_rival": float(np.mean([r["delta_p_rival"] for r in selected])),
-            "mean_delta_gap": float(np.mean([r["delta_gap"] for r in selected])),
-            "fraction_flipped_to_rival": float(np.mean([r["flip_to_rival"] for r in selected])),
+            "source":a,"source_name":NAMES.get(a,str(a)),
+            "rival":b,"rival_name":NAMES.get(b,str(b)),
+            "prototype_class":c,"prototype_kind":kind,
+            "n_interventions":len(arr),
+            "n_examples":len({r["sample_id"] for r in arr}),
+            "mean_delta_p_source":float(np.mean([r["delta_p_source"] for r in arr])),
+            "mean_delta_p_rival":float(np.mean([r["delta_p_rival"] for r in arr])),
+            "mean_delta_gap":float(np.mean([r["delta_gap"] for r in arr])),
+            "directed_fraction":float(np.mean([directed(r) for r in arr])),
+            "fraction_flipped_to_rival":float(np.mean([r["flip_to_rival"] for r in arr])),
         })
     return atlas, pairs
 
 
-def _plot_atlas(rows, bank, components, output: Path):
-    """Class heatmap: only tested cells are colored; all other cells grey."""
+def summarize_components(rows: list[dict]) -> list[dict]:
+    """Auditable pair-specific time/sensor localization summary, no invented cells."""
+    groups = defaultdict(list)
+    for r in rows:
+        key=(r["source"],r["rival"],r["prototype_class"],
+             r["prototype_kind"],r["group"],r["time_bin"])
+        groups[key].append(r)
+    out=[]
+    for (a,b,c,kind,g,t),rr in sorted(groups.items()):
+        out.append({
+            "source":a,"rival":b,"prototype_class":c,"prototype_kind":kind,
+            "group":g,"time_bin":t,"sensor":SENSORS[g],
+            "n_observations":len(rr),
+            "n_examples":len({r["sample_id"] for r in rr}),
+            "mean_delta_p_source":float(np.mean([r["delta_p_source"] for r in rr])),
+            "mean_delta_p_rival":float(np.mean([r["delta_p_rival"] for r in rr])),
+            "mean_delta_gap":float(np.mean([r["delta_gap"] for r in rr])),
+            "directed_fraction":float(np.mean([
+                r["delta_p_source"] < -1e-9 and r["delta_p_rival"] > 1e-9
+                for r in rr
+            ])),
+            "flip_fraction":float(np.mean([r["flip_to_rival"] for r in rr])),
+        })
+    return out
+
+
+def _plot_atlas(rows, bank, components, output: Path, focus_by_class: dict[int,int]):
+    """Two pair-specific heatmaps: model p(source) and p(rival), in percentage points.
+
+    Gray cells were NOT tested. Never call this a physical class boundary.
+    """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.colors import TwoSlopeNorm
-    output.mkdir(parents=True, exist_ok=True)
+    output.mkdir(parents=True,exist_ok=True)
     n_bins = len({c.time_bin for c in components})
     n_groups = len({c.group for c in components})
-    for a in bank.labels:
-        group = [r for r in rows if r["source"] == a and
-                 r["prototype_class"] == r["rival"] and
-                 r["prototype_kind"] == "mean"]
-        if not group:
-            continue
-        values = np.full((n_groups,n_bins), np.nan)
-        counts = np.zeros((n_groups,n_bins), dtype=int)
-        for row in group:
-            g,b = row["group"], row["time_bin"]
-            values[g,b] = (0.0 if np.isnan(values[g,b]) else values[g,b]) + row["delta_gap"]
-            counts[g,b] += 1
-        np.divide(values, counts, out=values, where=counts>0)
-        absmax = max(float(np.nanmax(np.abs(values))), 1e-4)
-        fig, ax = plt.subplots(figsize=(10, 3.8))
-        cmap = plt.get_cmap("coolwarm").copy()
-        cmap.set_bad("#e0e0e0")
-        im = ax.imshow(np.ma.masked_invalid(values), cmap=cmap, aspect="auto",
-                       norm=TwoSlopeNorm(vmin=-absmax, vcenter=0, vmax=absmax))
-        ax.set_yticks(range(n_groups), SENSORS[:n_groups])
-        ax.set_xticks(range(n_bins), [str(x) for x in range(n_bins)])
-        ax.set_xlabel("Time bin (blank = not evaluated)")
-        ax.set_title(f"{NAMES.get(a,str(a))}: change in fixed pair margin after rival MEAN replacement")
-        for g in range(n_groups):
-            for b in range(n_bins):
-                if counts[g,b]: ax.text(b,g,str(counts[g,b]),ha="center",va="center",fontsize=7)
-        fig.colorbar(im, ax=ax, label="delta log-score gap (negative = toward rival)")
-        fig.tight_layout()
-        fig.savefig(output/f"class_{a:02d}_heatmap.png", dpi=145)
+    for a,b in focus_by_class.items():
+        arr = [r for r in rows if r["source"]==a and r["rival"]==b
+               and r["prototype_class"]==b and r["prototype_kind"]=="mean"]
+        if not arr:continue
+        fields=("delta_p_source","delta_p_rival")
+        vals=[np.full((n_groups,n_bins),np.nan) for _ in fields]
+        counts=np.zeros((n_groups,n_bins),int)
+        for r in arr:
+            g,t=r["group"],r["time_bin"]
+            for mat,key in zip(vals,fields):
+                mat[g,t]=(0.0 if np.isnan(mat[g,t]) else mat[g,t])+100*r[key]
+            counts[g,t]+=1
+        for mat in vals:
+            np.divide(mat,counts,out=mat,where=counts>0)
+        absmax=max(max(float(np.nanmax(np.abs(mat))) for mat in vals),.001)
+        norm=TwoSlopeNorm(vmin=-absmax,vcenter=0,vmax=absmax)
+        cmap=plt.get_cmap("coolwarm").copy()
+        cmap.set_bad("#dddddd")
+        fig,ax=plt.subplots(1,2,figsize=(13,4.2),sharex=True,sharey=True)
+        for idx,(mat,cls) in enumerate(zip(vals,(a,b))):
+            im=ax[idx].imshow(np.ma.masked_invalid(mat),aspect="auto",cmap=cmap,norm=norm)
+            ax[idx].set_title(f"Effect on {NAMES.get(cls,str(cls))}")
+            ax[idx].set_xticks(range(n_bins))
+            ax[idx].set_xlabel("Time bins (gray = not tested)")
+            for g in range(n_groups):
+                for t in range(n_bins):
+                    if counts[g,t]:
+                        ax[idx].text(t,g,str(counts[g,t]),ha="center",va="center",fontsize=7)
+        ax[0].set_yticks(range(n_groups),SENSORS[:n_groups])
+        fig.suptitle(f"{NAMES.get(a,str(a))} vs {NAMES.get(b,str(b))}: rival-mean intervention")
+        fig.colorbar(im,ax=ax,label="Change in model class score (percentage points)")
+        fig.savefig(output/f"class_{a:02d}_heatmap.png",dpi=145,bbox_inches="tight")
         plt.close(fig)
 
 
@@ -197,7 +235,7 @@ def _plot_local_case(x: np.ndarray, bank, components,
 
 
 def render_report(atlas: list[dict], cases: dict[int, list[dict]], bank,
-                  args, output: Path):
+                  args, output: Path, with_plots: bool = True):
     lines = [
         "# Class-prototype intervention atlas (PAMAP2)",
         "",
@@ -214,20 +252,19 @@ def render_report(atlas: list[dict], cases: dict[int, list[dict]], bank,
         "",
         "## Descriptive coverage by predicted and true class",
         "",
-        "| Class | Correct test available | Audited | Mean delta gap to rival | Target flip rate |",
+        "| Class | Correct test available | Audited | Mean-target directed fraction | Target flip rate |",
         "|---|---:|---:|---:|---:|",
     ]
     for r in atlas:
-        gap = ("—" if r["target_mean_delta_margin"] is None
-               else f"{r['target_mean_delta_margin']:+.3f}")
+        gap = ("—" if r["target_mean_directed_fraction"] is None
+               else f"{r['target_mean_directed_fraction']:.1%}")
         rate = ("—" if r["target_prototype_flip_fraction"] is None
                 else f"{r['target_prototype_flip_fraction']:.1%}")
         lines.append(f"| {r['class_name']} | {r['eligible_correct_test']} | "
                      f"{r['audited_examples']} | {gap} | {rate} |")
-    lines.extend(["", "Negative gap delta means the chosen target-template "
-                  "replacement made the source less favorable relative to the rival.",
-                  "The mean combines different rival classes where present. Use "
-                  "`pair_summary.csv` for like-for-like pair comparisons.", "",
+    lines.extend(["", "Directed means BOTH model p(source) decreases AND p(rival) increases.",
+                  "The class-level mean mixes different rivals; see pair_summary.csv for "
+                  "like-for-like comparisons. Neither implies real-world causality.", "",
                   "## Local class explanations (one example per available class)", ""])
     for a in bank.labels:
         records = cases.get(a, [])
@@ -249,8 +286,9 @@ def render_report(atlas: list[dict], cases: dict[int, list[dict]], bank,
             lines.append("")
             lines.append(describe_intervention(best,NAMES,SENSORS))
             lines.append("")
-        lines.append(f"![Measured target-prototype effects](plots/class_{a:02d}_heatmap.png)")
-        lines.append(f"![Representative signal fragment](plots/class_{a:02d}_example.png)")
+        if with_plots:
+            lines.append(f"![Measured class-score changes](plots/class_{a:02d}_heatmap.png)")
+            lines.append(f"![Representative signal fragment](plots/class_{a:02d}_example.png)")
         lines.append("")
     lines.extend([
         "## Scientific limitations",
@@ -338,11 +376,13 @@ def run(args):
         print(f"{NAMES.get(source,str(source))}: sample {sample_id}, "
               f"{len(competing)} target comparisons, {extra_evals} cumulative Q",flush=True)
     atlas,pairs = gather_summary(rows,bank.labels,coverage)
+    component_summary = summarize_components(rows)
     output = Path(args.out_dir)
     output.mkdir(parents=True,exist_ok=True)
     write_csv(output/"per_intervention.csv",rows)
     write_csv(output/"class_atlas.csv",atlas)
     write_csv(output/"pair_summary.csv",pairs)
+    write_csv(output/"component_summary.csv",component_summary)
     if not args.no_plots:
         for a in bank.labels:
             if a not in first_cases:continue
@@ -350,8 +390,10 @@ def run(args):
             _plot_local_case(xv[sample_id],bank,components,
                              [r for r in rows if r["sample_id"]==sample_id],
                              a,first_cases[a][1][0]["rival"],output/"plots")
-        _plot_atlas(rows,bank,components,output/"plots")
-    render_report(atlas,{a:rr for a,(i,rr) in first_cases.items()},bank,args,output)
+        focus={a:rr[0]["rival"] for a,(i,rr) in first_cases.items()}
+        _plot_atlas(rows,bank,components,output/"plots",focus)
+    render_report(atlas,{a:rr for a,(i,rr) in first_cases.items()},bank,args,output,
+                  with_plots=not args.no_plots)
     manifest = {
         "dataset":"PAMAP2", "npz_sha256":hashlib.sha256(path.read_bytes()).hexdigest(),
         "source":"official dataset prepared with scripts/preprocess_pamap2.py",
