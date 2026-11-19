@@ -9,9 +9,17 @@ on:
       - 'scripts/run_q16_matched_ablation.py'
       - 'beaconxai/subject_sampling.py'
       - 'tests/test_subject_sampling.py'
+      - 'scripts/preprocess_pamap2.py'
+      - 'tests/test_pamap2_download.py'
+      - 'beaconxai/candidate_selection.py'
+      - 'tests/test_candidate_selection.py'
       - 'beaconxai/rank_fusion.py'
       - 'tests/test_rank_fusion.py'
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -22,6 +30,7 @@ jobs:
     timeout-minutes: 70
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - heldout: '2,3'
