@@ -153,12 +153,12 @@ def test_real_runner_interface_on_toy_data_and_png_outputs(tmp_path,monkeypatch)
                          max_targets=0,prototype_mode="both",taper=2,no_plots=False)
     run(args)
     out=args.out_dir
-    data=json.loads((out/"manifest.json").read_text(encoding="utf-8"))
-    assert data["q_actual_per_pair"]==16
-    assert data["n_explained_examples"]==4
-    assert data["n_class_passports_observed"]==2
-    assert data["additional_model_evaluations"]==4*16
-    assert data["prototype_train_bytes"]>0
+    meta=json.loads((out/"manifest.json").read_text(encoding="utf-8"))
+    assert meta["q_actual_per_pair"]==16
+    assert meta["n_explained_examples"]==4
+    assert meta["n_class_passports_observed"]==2
+    assert meta["additional_model_evaluations"]==4*16
+    assert meta["prototype_train_bytes"]>0
     with (out/"per_intervention.csv").open(encoding="utf-8") as f:
         rows=list(csv.DictReader(f))
     assert len(rows)==64
