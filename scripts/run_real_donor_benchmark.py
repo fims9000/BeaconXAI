@@ -13,8 +13,12 @@ import hashlib
 import json
 import time
 from pathlib import Path
+import sys
 from collections import defaultdict
 import numpy as np
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 from beaconxai.contrastive import make_components
 from beaconxai.real_donor import (fit_real_donor_bank, make_target_replacement,
