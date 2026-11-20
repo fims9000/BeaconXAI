@@ -79,8 +79,8 @@ jobs:
               outputs_composite/esp32c3_firmware/
             cp embedded/adaptive_v2_firmware/.pio/build/esp32c3/firmware.elf \
               outputs_composite/esp32c3_firmware/
-            sha256sum outputs_composite/esp32c3_firmware/firmware.bin \
-              > outputs_composite/esp32c3_firmware/firmware.sha256
+            (cd outputs_composite/esp32c3_firmware && \
+              sha256sum firmware.bin > firmware.sha256)
             if test -f embedded/adaptive_v2_firmware/.pio/build/esp32c3/firmware.map; then
               cp embedded/adaptive_v2_firmware/.pio/build/esp32c3/firmware.map \
                 outputs_composite/esp32c3_firmware/
