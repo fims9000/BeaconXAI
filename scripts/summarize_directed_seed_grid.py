@@ -40,7 +40,8 @@ def summarize_seed_grid(root: Path, model: str, seeds: list[int]) -> dict:
         summary={}
         by_sub={}
         for method in ("original_beacon_q16","signed_pairwise_q16",
-                       "signed_ridge_q16","cheap_pairwise_q0","cheap_original_q0"):
+                       "signed_ridge_q16","active_residual_q16",
+                       "cheap_pairwise_q0","cheap_original_q0"):
             subset=[r for r in allrows if r["method"]==method and
                     int(r["sample"]) in eligible]
             valid_subjects=sorted({int(r["subject"]) for r in subset})
@@ -56,8 +57,17 @@ def summarize_seed_grid(root: Path, model: str, seeds: list[int]) -> dict:
             summary[method]=float(np.mean(list(by_sub[method].values()))) if valid_subjects else None
         b=summary["original_beacon_q16"]
         p=summary["signed_pairwise_q16"]
+        active=summary["active_residual_q16"]
         diffs=np.asarray([
             by_sub["signed_pairwise_q16"][s]-by_sub["original_beacon_q16"][s]
+            for s in sorted(by_sub["original_beacon_q16"])
+        ])
+        active_delta=np.asarray([
+            by_sub["active_residual_q16"][s]-by_sub["original_beacon_q16"][s]
+            for s in sorted(by_sub["original_beacon_q16"])
+        ])
+        active_vs_pair=np.asarray([
+            by_sub["active_residual_q16"][s]-by_sub["signed_pairwise_q16"][s]
             for s in sorted(by_sub["original_beacon_q16"])
         ])
         rows.append({
@@ -65,8 +75,14 @@ def summarize_seed_grid(root: Path, model: str, seeds: list[int]) -> dict:
             "test_windows":report["test_windows"],
             "eligible_windows":len(eligible),
             "eligible_subjects":len(diffs),
-            "original_q16":b,"pairwise_q16":p,
+            "original_q16":b,"pairwise_q16":p,"active_residual_q16":active,
             "difference_pp":float(100*(p-b)) if b is not None else None,
+            "active_minus_original_pp":float(100*(active-b)) if b is not None else None,
+            "active_minus_pairwise_pp":float(100*(active-p)) if p is not None else None,
+            "active_better_subjects":int(np.sum(active_delta>1e-12)),
+            "active_worse_subjects":int(np.sum(active_delta<-1e-12)),
+            "active_vs_pairwise_better_subjects":int(np.sum(active_vs_pair>1e-12)),
+            "active_vs_pairwise_worse_subjects":int(np.sum(active_vs_pair<-1e-12)),
             "positive_subject_differences":int(np.sum(diffs>1e-12)),
             "negative_subject_differences":int(np.sum(diffs<-1e-12)),
             "equal_subject_differences":int(np.sum(abs(diffs)<=1e-12)),
@@ -74,6 +90,10 @@ def summarize_seed_grid(root: Path, model: str, seeds: list[int]) -> dict:
             "surrogate_subjects":report["train_subject_groups"]["surrogate_fit"],
         })
     numbers=[r["difference_pp"] for r in rows if r["difference_pp"] is not None]
+    active_numbers=[r["active_minus_original_pp"] for r in rows
+                    if r["active_minus_original_pp"] is not None]
+    active_vs_pair=[r["active_minus_pairwise_pp"] for r in rows
+                    if r["active_minus_pairwise_pp"] is not None]
     return {
         "analysis":"seeds vary classifier/surrogate train roles, same fixed heldout windows",
         "model":model,"seeds":seeds,"per_seed":rows,
@@ -81,6 +101,10 @@ def summarize_seed_grid(root: Path, model: str, seeds: list[int]) -> dict:
         "min_difference_pp":float(np.min(numbers)) if numbers else None,
         "max_difference_pp":float(np.max(numbers)) if numbers else None,
         "seeds_improved":sum(v>0 for v in numbers),
+        "active_mean_minus_original_pp":float(np.mean(active_numbers)) if active_numbers else None,
+        "active_mean_minus_pairwise_pp":float(np.mean(active_vs_pair)) if active_vs_pair else None,
+        "active_seeds_improved_over_original":sum(v>0 for v in active_numbers),
+        "active_seeds_improved_over_pairwise":sum(v>0 for v in active_vs_pair),
         "not_independent_test_sets":True,
         "not_confirmatory_significance":True,
         "no_heldout_labels_used_for_inference":True,
@@ -103,6 +127,10 @@ def main():
         "differences_pp":[r["difference_pp"] for r in summary["per_seed"]],
         "mean_difference_pp":summary["mean_difference_pp"],
         "seeds_improved":summary["seeds_improved"],
+        "active_differences_pp":[r["active_minus_original_pp"] for r in summary["per_seed"]],
+        "active_vs_pairwise_pp":[r["active_minus_pairwise_pp"] for r in summary["per_seed"]],
+        "active_seeds_improved_over_original":summary["active_seeds_improved_over_original"],
+        "active_seeds_improved_over_pairwise":summary["active_seeds_improved_over_pairwise"],
         "not_independent":True
     }),flush=True)
 
