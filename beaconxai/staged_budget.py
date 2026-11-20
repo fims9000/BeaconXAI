@@ -42,6 +42,7 @@ class StagedResult:
     queries: int
     stage_features: dict[int, float]
     stage_rankings: dict[int, list[int]]
+    measured_effects: list[float]
     actual_forward_batches: int
 
 
@@ -113,6 +114,7 @@ def run_staged_audit(
         ranking=rankings[end],
         selected=ordered_ids[:end], queries=end,
         stage_features=features, stage_rankings=rankings,
+        measured_effects=measured.copy(),
         actual_forward_batches=n_batches,
     )
 
