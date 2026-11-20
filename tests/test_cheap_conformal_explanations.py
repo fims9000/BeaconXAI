@@ -33,7 +33,10 @@ def fast_model(monkeypatch):
             z=np.asarray(features)
             # Include contributions throughout the window so component
             # response differs, without a real trained black box in tests.
-            v=np.tanh(z[:,0]*.3 + z[:,10]*.2+z[:,26]*.1)
+            # Distribute signal dependence across all time/sensor blocks
+            # so full Q36 has a meaningful (usually strict) top-3.
+            weights=np.sin(np.arange(z.shape[1])*.02)
+            v=np.tanh(np.dot(z,weights)*.03)
             p=np.clip(.5+.3*v,.05,.95)
             return np.column_stack((p,1-p))
     class Adapter:
