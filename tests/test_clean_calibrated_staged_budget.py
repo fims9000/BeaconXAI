@@ -66,6 +66,13 @@ def test_train_calibration_and_genuine_outer_stopping(monkeypatch,tmp_path):
         sum(int(r["extra_model_evaluations"]) for r in per_sample))
     assert manifest["constrained_upgrade_queries_actual"]>=16*8
     assert manifest["random_budget_queries_actual"]>=16*8
+    exact=json.loads((args.out_dir/"random_exact_cost_match.json").read_text())
+    assert exact["n_windows"]==8
+    assert exact["n_subjects"]==2
+    assert exact["n_random_permutations"]==1000
+    assert exact["not_population_significance"] is True
+    assert exact["actual_online_policy_subject_macro_mean_q"]==(
+        exact["random_control_macro_mean_q_matched_exactly"])
     assert all(int(r["extra_model_evaluations"])>=16 for r in per_sample
                if r["method"]=="constrained_upgrade16")
     before=(args.out_dir/"per_sample.csv").read_bytes()
