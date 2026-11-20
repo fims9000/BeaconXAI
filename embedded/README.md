@@ -162,3 +162,25 @@ has yet been collected.
 Build-time RAM/Flash size estimates do **not** prove successful device
 execution, energy consumption, peak runtime memory or causal explanation
 validity. A firmware binary is not intended for blind deployment.
+
+
+### Acceptance after connecting a physical ESP32-C3
+
+The build contains a frozen raw test window and trained model. **Do not treat
+the successful PlatformIO build as an executed board test.** Once the target
+board is available, use the already generated
+`embedded/adaptive_v2_firmware` build artifacts and the appropriate serial
+port/driver to upload and capture the actual UART output. A captured log can
+be checked with:
+
+```bash
+python scripts/check_esp32c3_audit_log.py \
+  --uart-log outputs_composite/esp32c3_uart.log \
+  --out outputs_composite/esp32c3_hardware_acceptance.json
+```
+
+The verifier refuses absent/failed class, Q16 shortlist, top-3-set or
+model-call checks. The board prints a **single-window** microsecond timer
+and a minimum-free-heap indicator; neither is a distribution of latencies
+nor a measurement of total peak RAM. Energy must be measured externally.
+Never present the unit-test's artificial UART string as a hardware result.
