@@ -101,8 +101,12 @@ def test_online_certificate_uses_real_probes_not_full_oracle():
         # The original baseline is only a supplied constant score vector.
         # Fine to use a fake deterministic black box for API tests.
         return np.column_stack((score/100, np.zeros(len(batch)),np.zeros(len(batch))))
-    predicted=np.full(n,.01)
-    predicted[:4]=10.
+    # Construct a VALID simultaneous envelope in this unit test from a
+    # separately measured oracle (offline test fixture only). The online
+    # API never receives that oracle, only component-wise upper values.
+    truth=full_model_responses(x,base,comps,fake_model)
+    calls.clear()
+    predicted=truth+.01
     bound=SubjectBound(alpha=.2,calibration_subjects=9,cutoff_rank=8,
                        quantile=0.,minimum_windows_per_subject=2,
                        maximum_windows_per_subject=2)
@@ -114,7 +118,6 @@ def test_online_certificate_uses_real_probes_not_full_oracle():
     # A certificate is claimed only if actual observations beat all
     # unmeasured upper envelopes; otherwise the API explicitly abstains.
     if result.certified:
-        truth=full_model_responses(x,base,comps,fake_model)
         reference=np.argsort(-truth,kind="stable")[:3].tolist()
         assert set(result.ranked[:3])==set(reference)
     else:
@@ -135,3 +138,23 @@ def test_infinite_conformal_envelope_must_abstain_and_spend_full_budget():
     assert result.extra_model_evaluations==16
     assert calls==[4,4,4,4]
     assert np.isinf(result.maximum_unqueried_upper_bound)
+
+
+def test_invalid_uncovered_bounds_cannot_promise_correct_top3():
+    x,mean,comps,base=_sample()
+    x[comps[0].t0:comps[0].t1,comps[0].c0:comps[0].c1]=10.
+    def model(batch):
+        scores=np.sum(np.square(batch),axis=(1,2))/100
+        return np.column_stack((scores,np.zeros(len(batch)),np.zeros(len(batch))))
+    truth=full_model_responses(x,base,comps,model)
+    fabricated=np.full(36,.01)
+    fabricated[:4]=10.
+    b=SubjectBound(.2,9,8,0.,2,2)
+    result=run_certified_explanation(
+        x,base,comps,fabricated,b,np.ones(36),model,max_queries=16,step=4)
+    # A fabricated under-covering envelope can yield a FALSE certificate.
+    # The actual statistical protection is the separate calibration event:
+    # the online certificate itself cannot repair an invalid upper bound.
+    assert not np.all(truth<=b.upper(fabricated,np.ones(36)))
+    assert result.certified
+    assert set(result.ranked[:3])!=set(np.argsort(-truth)[:3])
