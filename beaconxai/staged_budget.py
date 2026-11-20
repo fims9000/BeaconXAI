@@ -278,3 +278,106 @@ def fit_constrained_upgrade(
         "nested_queries_are_actual_if_applied":True,
         "no_independent_quality_or_causal_guarantee":True,
     }
+
+
+def exact_cost_matched_random_upgrade(
+    rows: Sequence[dict], seed: int = 57, permutations: int = 1000,
+) -> dict:
+    """OFFLINE negative control with exactly the same upgrade count per subject.
+
+    The policy was actually executed on held-out windows, whereas this
+    retrospective comparator reuses independently *measured* fixed16/fixed32
+    outcomes. No Q36 reference leaks into online decisions; this procedure
+    is descriptive conditional-on-these-windows randomization, NOT a
+    population p-value or hardware model-call measurement.
+    """
+    if permutations < 10:
+        raise ValueError("need >=10 independent random assignments")
+    required=("fixed_q16","fixed_q32","constrained_upgrade16")
+    lookup={}
+    for r in rows:
+        if r.get("method") not in required:
+            continue
+        key=(int(r["subject"]),int(r["sample"]),str(r["method"]))
+        if key in lookup:
+            raise ValueError("duplicate subject, sample and method")
+        lookup[key]=r
+    if not lookup:
+        raise ValueError("no fixed-Q and constrained-upgrade rows")
+    subjects=sorted({key[0] for key in lookup})
+    by_subject=[]
+    for subject in subjects:
+        samples=sorted({key[1] for key in lookup if key[0]==subject})
+        if not samples:
+            raise ValueError("subject without windows")
+        arr={kind:[] for kind in required}
+        for sample in samples:
+            for kind in required:
+                key=(subject,sample,kind)
+                if key not in lookup:
+                    raise ValueError("missing matched fixed-Q or selected row")
+                arr[kind].append(lookup[key])
+        base16=np.array([float(r["top3_overlap"]) for r in arr["fixed_q16"]])
+        ref32=np.array([float(r["top3_overlap"]) for r in arr["fixed_q32"]])
+        selected_q=np.array([int(r["extra_model_evaluations"])
+                             for r in arr["constrained_upgrade16"]])
+        observed=np.array([float(r["top3_overlap"])
+                           for r in arr["constrained_upgrade16"]])
+        if (not np.isfinite(base16).all() or not np.isfinite(ref32).all()
+            or not np.isfinite(observed).all()
+            or any(not 0<=v<=1 for v in
+                   np.concatenate((base16,ref32,observed)))
+            or any(q not in (16,32) for q in selected_q)):
+            raise ValueError("invalid measured reference or upgrade budget")
+        expected=np.where(selected_q==32,ref32,base16)
+        if not np.allclose(expected,observed,atol=1e-9,rtol=0):
+            raise ValueError("constrained policy disagrees with directly tested control")
+        k=int(np.count_nonzero(selected_q==32))
+        by_subject.append({
+            "subject":subject,"n":len(samples),"upgrades":k,
+            "baseline_overlap":float(np.mean(base16)),
+            "observed_overlap":float(np.mean(observed)),
+            "mean_q":float(np.mean(selected_q)),
+            "delta_if_upgraded":ref32-base16,
+            "base16":base16,
+        })
+    observed_macro=float(np.mean([r["observed_overlap"] for r in by_subject]))
+    exact_q=float(np.mean([r["mean_q"] for r in by_subject]))
+    rng=np.random.default_rng(seed)
+    random_macros=np.zeros(permutations,dtype=float)
+    for permutation in range(permutations):
+        vals=[]
+        for subj in by_subject:
+            mask=np.zeros(subj["n"],dtype=bool)
+            if subj["upgrades"]>0:
+                mask[rng.choice(subj["n"],size=subj["upgrades"],replace=False)]=True
+            vals.append(float(np.mean(subj["base16"]+
+                                      mask*subj["delta_if_upgraded"])))
+        random_macros[permutation]=float(np.mean(vals))
+    result={
+        "benchmark":"retrospective, exact-per-subject-Q matched random upgrades",
+        "n_subjects":len(subjects),
+        "n_windows":sum(r["n"] for r in by_subject),
+        "n_random_permutations":permutations,
+        "observed_subject_macro_overlap":observed_macro,
+        "baseline_q16_subject_macro_overlap":float(np.mean(
+            [r["baseline_overlap"] for r in by_subject])),
+        "actual_online_policy_subject_macro_mean_q":exact_q,
+        "random_control_macro_mean_q_matched_exactly":exact_q,
+        "random_matched_overlap_mean":float(np.mean(random_macros)),
+        "random_matched_overlap_5th_percentile":float(np.quantile(random_macros,.05)),
+        "random_matched_overlap_95th_percentile":float(np.quantile(random_macros,.95)),
+        "observed_minus_random_matched_mean":float(
+            observed_macro-np.mean(random_macros)),
+        "random_permutation_fraction_at_least_as_good_as_observed":float(
+            np.mean(random_macros>=observed_macro-1e-12)),
+        "not_population_significance":True,
+        "random_comparator_uses_already_measured_offline_fixed_control_effects":True,
+        "actual_online_query_count_separately_verified":True,
+        "per_subject":[{
+            "subject":r["subject"],"n":r["n"],"upgraded_windows":r["upgrades"],
+            "policy_overlap":r["observed_overlap"],
+            "baseline_overlap":r["baseline_overlap"],"mean_q":r["mean_q"]
+        } for r in by_subject],
+    }
+    return result
