@@ -59,7 +59,9 @@ def run(args):
     out=Path(args.out_dir)
     out.mkdir(parents=True,exist_ok=True)
     (out/"beacon_mlp_model.hpp").write_text(header,encoding="utf8")
-    save_parity_fixture(out/"model_parity_f32.bin",parity_x,logit_gap)
+    # Store RAW sensor inputs: C++ must now independently apply exported
+    # TRAIN-derived channel normalization before its forward pass.
+    save_parity_fixture(out/"model_parity_f32.bin",xv[idx],logit_gap)
     projected=mlp_resource_projection(
         model.coefs_,model.intercepts_,sample_shape=parity_x.shape[1:],
         n_classes=len(classes),n_components=36,query_budget=16)
@@ -83,6 +85,8 @@ def run(args):
         "export_float32_not_quantized":True,
         "training_label_used_for_fitting_only":True,
         "test_labels_not_read_for_export_or_parity":True,
+        "parity_fixture_contains_raw_unnormalized_sensor_input":True,
+        "cpp_training_mu_sigma_parity_required":True,
         "not_firmware_or_MCU_validated":True,
     }
     (out/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf8")
