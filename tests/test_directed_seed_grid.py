@@ -23,6 +23,7 @@ def _write(root,seed,selected=42):
         methods={
             "original_beacon_q16":(.5,.5),
             "signed_pairwise_q16":(.7,.6),
+            "active_residual_q16":(.8,.7),
             "signed_ridge_q16":(.6,.5),
             "cheap_pairwise_q0":(.1,.2),
             "cheap_original_q0":(.0,.1),
@@ -42,6 +43,9 @@ def test_same_test_windows_descriptive_seed_report(tmp_path):
     assert result["model"]=="raw_mlp"
     assert result["seeds_improved"]==2
     assert result["mean_difference_pp"]==pytest.approx(15.)
+    assert result["active_seeds_improved_over_original"]==2
+    assert result["active_seeds_improved_over_pairwise"]==2
+    assert result["active_mean_minus_original_pp"]==pytest.approx(25.)
     assert result["not_independent_test_sets"]
 
 
