@@ -16,6 +16,9 @@ on:
       - 'embedded/tests/test_adaptive_v2_core.cpp'
       - 'embedded/staged_adaptive_upgrade.hpp'
       - 'embedded/tests/test_staged_adaptive_upgrade.cpp'
+      - 'embedded/tests/test_staged_exported_mlp.cpp'
+      - 'beaconxai/staged_budget.py'
+      - 'scripts/run_clean_calibrated_staged_budget.py'
       - 'beaconxai/cpp_adaptive_v2_export.py'
       - 'tests/test_cpp_adaptive_v2_export.py'
       - 'embedded/dual_operator_audit.hpp'
@@ -27,6 +30,14 @@ concurrency:
 
 permissions:
   contents: read
+
+env:
+  OMP_NUM_THREADS: '1'
+  OPENBLAS_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  VECLIB_MAXIMUM_THREADS: '1'
+  NUMEXPR_NUM_THREADS: '1'
+  PYTHONHASHSEED: '0'
 
 jobs:
   cpp-mlp:
@@ -64,7 +75,7 @@ jobs:
           python -u scripts/export_raw_mlp_cpp.py \
             --npz-path data/uci_har_official_subjects.npz \
             --out-dir outputs_composite/uci_har_mlp_cpp \
-            --parity-samples 96 --seed 57 --adaptive-parity
+            --parity-samples 96 --seed 57 --adaptive-parity --staged-parity
       - name: Compile and test C++11 MLP numeric parity and Q16 callback
         run: |
           g++ -std=c++11 -O2 -Wall -Wextra -Werror -pedantic \
@@ -80,6 +91,14 @@ jobs:
             -o /tmp/beacon-adaptive-v2-parity
           /tmp/beacon-adaptive-v2-parity \
             outputs_composite/uci_har_mlp_cpp/adaptive_v2_q16_parity.bin
+      - name: Verify train-only Q16 to Q32 staged model-call parity in C++
+        run: |
+          g++ -std=c++11 -O2 -Wall -Wextra -Werror -pedantic \
+            -Ioutputs_composite/uci_har_mlp_cpp \
+            embedded/tests/test_staged_exported_mlp.cpp \
+            -o /tmp/beacon-staged-exported-parity
+          /tmp/beacon-staged-exported-parity \
+            outputs_composite/uci_har_mlp_cpp/staged_q16_q32_parity.bin
       - name: Provenance
         if: always()
         run: |
