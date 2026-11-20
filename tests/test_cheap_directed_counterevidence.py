@@ -56,15 +56,20 @@ def test_clean_signed_counterevidence_benchmark_and_ytest_invariance(tmp_path,mo
     path=sample_file(tmp_path/"sample.npz")
     args=make_args(path,tmp_path/"first")
     manifest,summary=directed.run(args)
-    assert len(summary)==7
+    assert len(summary)==8
     assert manifest["source_class_fixed_before_interventions"]
     assert manifest["not_moving_top2"]
     assert manifest["test_labels_never_read"]
     assert manifest["test_windows"]==18
     rows=list(csv.DictReader((args.out_dir/"per_sample.csv").open()))
-    assert len(rows)==18*7
+    assert len(rows)==18*8
     assert all(int(r["extra_model_evaluations"]) in (0,16) for r in rows)
-    assert manifest["test_actual_budgeted_model_calls"]==18*4*16
+    assert manifest["test_actual_budgeted_model_calls"]==18*5*16
+    assert manifest["active_residual_online_queried_stages"]==[8,8]
+    active=[r for r in rows if r["method"]=="active_residual_q16"]
+    assert len(active)==18
+    assert all(int(r["active_inferred_unqueried_top3_count"]) in (0,1,2,3)
+               for r in active)
     assert manifest["model_examples_counted"]>manifest["test_actual_budgeted_model_calls"]
     before=(args.out_dir/"per_sample.csv").read_bytes()
     with np.load(path) as fp:
