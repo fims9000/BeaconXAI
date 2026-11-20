@@ -22,6 +22,7 @@ sys.path.insert(0,str(ROOT))
 from beaconxai.datasets import load_npz_dataset, fit_channel_standardizer, apply_standardizer
 from beaconxai.contrastive import fit_class_profiles, make_components, neutralize_interp
 from beaconxai.real_donor import fit_real_donor_bank, make_target_replacement
+from beaconxai.dual_operator_audit import dual_operator_audit
 from beaconxai.subject_sampling import balanced_subject_sample
 from beaconxai.sensitivity_reference import (
     moving_margin_effects, rank_effects, reference_metrics, subject_macro_summary
@@ -78,6 +79,7 @@ def study(args):
     baselines=model(test)
     rows=[]
     breakdown=[]
+    consensus_rows=[]
     for i,x in enumerate(test):
         original=baselines[i]
         a=int(np.argmax(original))
@@ -88,7 +90,8 @@ def study(args):
         interpolated=np.stack([neutralize_interp(x,c) for c in comps])
         medoid=np.stack([make_target_replacement(
             x,c,j,b,"medoid",bank,comps,taper=2)[0] for j,c in enumerate(comps)])
-        full_interp=rank_effects(moving_margin_effects(original,model(interpolated)),list(range(M)))
+        interpolation_effects=moving_margin_effects(original,model(interpolated))
+        full_interp=rank_effects(interpolation_effects,list(range(M)))
         medoid_effects=moving_margin_effects(original,model(medoid))
         full_medoid=rank_effects(medoid_effects,list(range(M)))
         cheap=class_cheap(x,profiles[a][0],comps)[2]
@@ -99,8 +102,44 @@ def study(args):
             M,args.budget,replace=False).astype(int).tolist()
         qrand=rank_effects(moving_margin_effects(original,model(medoid[random_selected])),
                            random_selected)
+        dual=dual_operator_audit(
+            x,comps,cheap,model,original,bank.medoids[b],
+            budget=args.budget,taper=2,minimum_common_top3=2)
+        if dual.extra_model_evaluations!=args.budget:
+            raise AssertionError("two-operator probe exceeded Q budget")
         s=np.sort(medoid_effects)
         refmax=float(s[-1]);gap=float(s[-3]-s[-4])
+        interp_gap=float(np.sort(interpolation_effects)[-3]-
+                         np.sort(interpolation_effects)[-4])
+        full_agree=len(set(full_interp[:3])&set(full_medoid[:3]))/3
+        # Full-Q reference is used ONLY in this offline evaluation step.
+        ref_consistent=int(full_agree>=2/3 and min(gap,interp_gap)>1e-6)
+        for label,order,reported in (
+            ("dual_operator_q16",dual.ranking,dual.reported),
+            ("medoid_q16",qmed,None),
+            ("interpolation_q16",qint,None),
+            ("uniform_medoid_q16",qrand,None),
+        ):
+            m1=reference_metrics(full_medoid,order,M,len(order))
+            m2=reference_metrics(full_interp,order,M,len(order))
+            consensus_rows.append({
+                "method":label,"subject":int(sid[i]),"sample":i,
+                "original_window_index":int(chosen[i]),
+                "extra_model_evaluations":args.budget,
+                "distinct_probed_components":len(order),
+                "medoid_reference_overlap":m1["top3_overlap"],
+                "interpolation_reference_overlap":m2["top3_overlap"],
+                "mean_reference_overlap":(m1["top3_overlap"]+m2["top3_overlap"])/2,
+                "worst_reference_overlap":min(m1["top3_overlap"],m2["top3_overlap"]),
+                "full_operator_reference_agreement":full_agree,
+                "full_operator_reference_consistent":ref_consistent,
+                "full_medoid_top3_gap":gap,
+                "full_interpolation_top3_gap":interp_gap,
+                "probed_operator_top3_agreement":(
+                    dual.top3_agreement if label=="dual_operator_q16" else None),
+                "reported_not_abstained":(
+                    int(reported) if reported is not None else None),
+            })
         methods=(
             ("medoid_q16",qmed,args.budget),
             ("interpolation_q16",qint,args.budget),
@@ -123,18 +162,32 @@ def study(args):
             "subject":int(sid[i]),"sample":i,"original_window_index":int(chosen[i]),
             "reference_top3_interpolation":",".join(map(str,full_interp[:3])),
             "reference_top3_real_medoid":",".join(map(str,full_medoid[:3])),
-            "full_reference_top3_agreement":len(set(full_interp[:3])&set(full_medoid[:3]))/3,
+            "full_reference_top3_agreement":full_agree,
+            "interpolation_reference_top3_cutoff_gap":interp_gap,
+            "dual_probe_interpolation_top3":",".join(map(str,dual.interpolation_ranking[:3])),
+            "dual_probe_medoid_top3":",".join(map(str,dual.donor_ranking[:3])),
+            "dual_probe_consensus_top3":",".join(map(str,dual.ranking[:3])),
+            "dual_probe_top3_agreement":dual.top3_agreement,
+            "dual_probe_reported":int(dual.reported),
+            "full_reference_agreement_ge_two_and_clear":ref_consistent,
             "medoid_reference_top3_cutoff_gap":gap,
             "medoid_reference_max_margin_shift":refmax,
             "medoid_reference_ambiguous":int(gap<=1e-6),
             "rival_class_predicted":b,
         })
     summ,subject=subject_macro_summary(rows)
+    from beaconxai.dual_operator_metrics import summarize_dual_operator
+    consensus_summary,consensus_subjects,gate_summary=summarize_dual_operator(consensus_rows)
     out=Path(args.out_dir);out.mkdir(parents=True,exist_ok=True)
     write_csv(out/"summary.csv",summ)
     write_csv(out/"per_subject.csv",subject)
     write_csv(out/"per_sample.csv",rows)
     write_csv(out/"operator_reference_comparison.csv",breakdown)
+    write_csv(out/"dual_operator_per_sample.csv",consensus_rows)
+    write_csv(out/"dual_operator_per_subject.csv",consensus_subjects)
+    write_csv(out/"dual_operator_summary.csv",consensus_summary)
+    (out/"dual_operator_gate.json").write_text(
+        json.dumps(gate_summary,indent=2),encoding="utf8")
     manifest={
         "dataset":args.dataset,"npz_sha256":hashlib.sha256(path.read_bytes()).hexdigest(),
         "train_subjects":sorted(map(int,np.unique(st))),
@@ -151,6 +204,17 @@ def study(args):
         "extra_model_queries_medoid_q16":args.budget,
         "extra_model_queries_interpolation_q16":args.budget,
         "extra_model_queries_random_medoid_q16":args.budget,
+        "extra_model_queries_dual_operator_q16":args.budget,
+        "dual_operator_distinct_components":args.budget//2,
+        "dual_operator_probe_allocation":{
+            "interpolation":args.budget//2,
+            "rival_training_medoid":args.budget//2,
+        },
+        "dual_operator_abstention":{
+            "rule":"report iff >=2 of the measured top3 components agree between operators",
+            "fixed_no_test_label_or_reference_tuning":True,
+            "not_a_coverage_or_causal_guarantee":True,
+        },
         "notes":[
             "Medoid from a rival activity class is a real training window but pasted segments may be unrealistic",
             "Full Q=M of different intervention operators can disagree; don't treat either as causal ground truth",
@@ -168,6 +232,12 @@ def study(args):
           float(np.mean([x["full_reference_top3_agreement"] for x in breakdown])),flush=True)
     print("medoid_reference_ambiguous=",sum(x["medoid_reference_ambiguous"] for x in breakdown),
           "/",len(breakdown),flush=True)
+    print("=== fixed-budget dual-operator audit (NOT causal validation) ===",flush=True)
+    for r in consensus_summary:
+        print(f"DUAL_COMPARE {r['method']} Q={r['extra_model_evaluations']} "
+              f"avg_full_ref={r['subject_macro_mean_reference_overlap']:.4f} "
+              f"worst_full_ref={r['subject_macro_worst_reference_overlap']:.4f}",flush=True)
+    print("DUAL_GATE",json.dumps(gate_summary,sort_keys=True),flush=True)
 
 
 def cli():
