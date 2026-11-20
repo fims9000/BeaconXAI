@@ -32,7 +32,7 @@ from beaconxai.contrastive import make_components,neutralize_interp
 from beaconxai.datasets import apply_standardizer,load_npz_dataset
 from beaconxai.conformal_evidence import (
     cheap_feature_matrix,fit_response_surrogate,
-    calibrate_subject_bound,full_model_responses,
+    fit_pairwise_top3_surrogate,calibrate_subject_bound,full_model_responses,
     run_certified_explanation,
 )
 from beaconxai.sensitivity_reference import (
@@ -169,6 +169,8 @@ def run(args):
         real_train.append(effects)
     surrogate=fit_response_surrogate(
         cheap_train,real_train,components,ridge_alpha=args.ridge_alpha)
+    pairwise=fit_pairwise_top3_surrogate(
+        cheap_train,real_train,topk=3,cost=args.pairwise_c)
     fit_model_examples=calls["examples"]
 
     # Calibration: one held-out subject is ONE exchangeability unit,
@@ -201,8 +203,9 @@ def run(args):
     test_bases=model(test)
     seed_rng=np.random.default_rng(args.seed+91)
     methods=[
-        "cheap_prior_q0","cheap_surrogate_q0",
+        "cheap_prior_q0","cheap_surrogate_q0","cheap_pairwise_q0",
         "original_adaptive_q16","surrogate_predicted_q16",
+        "pairwise_q16",
         "surrogate_upper_q16","uniform_q16","certify_or_abstain_q16",
     ]
     rows=[]
@@ -215,10 +218,12 @@ def run(args):
         source=int(np.argmax(base))
         phi=cheap_feature_matrix(x,profiles[source][0],base,components)
         pred,scale=surrogate.predict(phi,components)
+        pair_scores=pairwise.score(phi)
         upper=bound.upper(pred,scale)
         prior=class_cheap(x,profiles[source][0],components)[2]
         ordered_prior=np.argsort(-prior,kind="stable").astype(int).tolist()
         ordered_pred=np.argsort(-pred,kind="stable").astype(int).tolist()
+        ordered_pair=np.argsort(-pair_scores,kind="stable").astype(int).tolist()
         ordered_upper=np.argsort(-upper,kind="stable").astype(int).tolist()
         uniform=seed_rng.choice(M,size=args.max_queries,replace=False).tolist()
 
@@ -227,6 +232,7 @@ def run(args):
         for method,selection in (
             ("original_adaptive_q16",best_q(prior,args.max_queries)),
             ("surrogate_predicted_q16",ordered_pred[:args.max_queries]),
+            ("pairwise_q16",ordered_pair[:args.max_queries]),
             ("surrogate_upper_q16",ordered_upper[:args.max_queries]),
             ("uniform_q16",uniform),
         ):
@@ -248,6 +254,7 @@ def run(args):
         ranks={
             "cheap_prior_q0":(ordered_prior,0,list(range(M))),
             "cheap_surrogate_q0":(ordered_pred,0,list(range(M))),
+            "cheap_pairwise_q0":(ordered_pair,0,list(range(M))),
             **online,
         }
         for method,(ranking,q,chosen) in ranks.items():
@@ -302,6 +309,13 @@ def run(args):
     write_csv(out/"calibration_subject_scores.csv",calib_receipts)
     (out/"conformal_model.json").write_text(json.dumps({
         "features":surrogate.features,
+        "pairwise_top3_linear_coefficients":pairwise.logistic.coef_[0].tolist(),
+        "pairwise_feature_means":pairwise.scaler.mean_.tolist(),
+        "pairwise_feature_scales":pairwise.scaler.scale_.tolist(),
+        "pairwise_fitting_windows":pairwise.fitting_windows,
+        "pairwise_discarded_tied_windows":pairwise.discarded_tied_windows,
+        "pairwise_fitting_pairs":pairwise.training_pairs,
+        "pairwise_cost_parameter":args.pairwise_c,
         "ridge_alpha":float(args.ridge_alpha),
         "feature_means":surrogate.feature_scaler.mean_.tolist(),
         "feature_scales":surrogate.feature_scaler.scale_.tolist(),
@@ -330,6 +344,11 @@ def run(args):
         "training_channel_standardizer_sha256":
             calls["training_standardizer_sha256"],
         "n_sensitivities_fit_offline":len(proxy)*M,
+        "pairwise_top3_fit_windows":pairwise.fitting_windows,
+        "pairwise_top3_skipped_ambiguous_windows":
+            pairwise.discarded_tied_windows,
+        "pairwise_top3_training_pairs":pairwise.training_pairs,
+        "pairwise_logistic_regularization_C":args.pairwise_c,
         "n_sensitivities_calibrate_offline":len(calib)*M,
         "additional_training_sensitivities_model_calls":
             (len(proxy)+len(calib))*M,
@@ -363,6 +382,10 @@ def run(args):
             "wrong_certified_top3":wrong_certified_total,
             "no_full_reference_access_during_query_selection":True,
         },
+        "pairwise_ranker_float32_weights_scaler_bytes":int(
+            pairwise.logistic.coef_.astype("float32").nbytes+
+            pairwise.scaler.mean_.astype("float32").nbytes+
+            pairwise.scaler.scale_.astype("float32").nbytes),
         "memory_estimate_surrogate_coefficients_scaler_and_scales_bytes":int(
             surrogate.ridge.coef_.astype("float32").nbytes+
             surrogate.feature_scaler.mean_.astype("float32").nbytes+
@@ -405,6 +428,7 @@ def main():
     p.add_argument("--windows-per-subject",type=int,default=6)
     p.add_argument("--alpha",type=float,default=.2)
     p.add_argument("--ridge-alpha",type=float,default=100.)
+    p.add_argument("--pairwise-c",type=float,default=.1)
     p.add_argument("--max-queries",type=int,default=16)
     p.add_argument("--batch-size",type=int,default=4)
     run(p.parse_args())
