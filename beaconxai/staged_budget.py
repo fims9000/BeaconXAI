@@ -41,6 +41,7 @@ class StagedResult:
     selected: list[int]
     queries: int
     stage_features: dict[int, float]
+    stage_rankings: dict[int, list[int]]
     actual_forward_batches: int
 
 
@@ -82,6 +83,7 @@ def run_staged_audit(
     ordered_ids = np.argsort(-prior, kind="stable")[:32].astype(int).tolist()
     measured = []
     features = {}
+    rankings = {}
     n_batches = 0
     end = 0
     for q in STAGES:
@@ -93,6 +95,7 @@ def run_staged_audit(
         measured.extend(moving_margin_effects(base, outputs).tolist())
         end = q
         n_batches += 1
+        rankings[q] = rank_effects(np.asarray(measured), ordered_ids[:q])
         if q in (8, 16):
             features[q] = measured_top3_gap(np.array(measured))
         if (policy.mode == "fixed8" and q == 8
@@ -103,9 +106,10 @@ def run_staged_audit(
             or q == 32):
             break
     return StagedResult(
-        ranking=rank_effects(np.asarray(measured), ordered_ids[:end]),
+        ranking=rankings[end],
         selected=ordered_ids[:end], queries=end,
-        stage_features=features, actual_forward_batches=n_batches,
+        stage_features=features, stage_rankings=rankings,
+        actual_forward_batches=n_batches,
     )
 
 
