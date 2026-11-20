@@ -14,6 +14,11 @@ import time
 from pathlib import Path
 
 import numpy as np
+# Running "python scripts/export_raw_mlp_cpp.py" sets sys.path[0] to scripts/.
+# Add the repository root before importing the original reference script.
+ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT))
+
 from sklearn.neural_network import MLPClassifier
 from beaconxai.cpp_mlp_export import render_raw_mlp_header,save_parity_fixture
 from beaconxai.datasets import fit_channel_standardizer,apply_standardizer,load_npz_dataset
