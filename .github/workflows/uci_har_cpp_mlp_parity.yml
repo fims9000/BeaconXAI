@@ -14,6 +14,8 @@ on:
       - 'embedded/adaptive_v2_audit.hpp'
       - 'embedded/tests/test_adaptive_v2_exported_mlp.cpp'
       - 'embedded/tests/test_adaptive_v2_core.cpp'
+      - 'embedded/staged_adaptive_upgrade.hpp'
+      - 'embedded/tests/test_staged_adaptive_upgrade.cpp'
       - 'beaconxai/cpp_adaptive_v2_export.py'
       - 'tests/test_cpp_adaptive_v2_export.py'
       - 'embedded/dual_operator_audit.hpp'
@@ -47,6 +49,12 @@ jobs:
             embedded/tests/test_adaptive_v2_core.cpp \
             -o /tmp/beacon-adaptive-v2-core
           /tmp/beacon-adaptive-v2-core
+      - name: Verify experimental Q16 to Q32 C++ callback cost and failures
+        run: |
+          g++ -std=c++11 -O2 -Wall -Wextra -Werror -pedantic \
+            embedded/tests/test_staged_adaptive_upgrade.cpp \
+            -o /tmp/beacon-staged-upgrade-test
+          /tmp/beacon-staged-upgrade-test
       - name: Preprocess official UCI HAR
         run: |
           python scripts/preprocess_uci_har_for_q36.py \
