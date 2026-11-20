@@ -76,6 +76,19 @@ jobs:
             --npz-path data/uci_har_official_subjects.npz \
             --out-dir outputs_composite/uci_har_mlp_cpp \
             --parity-samples 96 --seed 57 --adaptive-parity --staged-parity
+      - name: Check optional board fixture exercises a Q32 path when available
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          x=json.loads(Path('outputs_composite/uci_har_mlp_cpp/manifest.json').read_text())
+          r=x['optional_staged_q16_q32_parity']
+          assert r is not None
+          assert r['threshold_fitted_only_on_official_training_subjects']
+          assert r['frozen_board_selfcheck_expected_q']==(
+              32 if r['n_upgraded_to_q32'] else 16)
+          print('FROZEN_Q32_PATH_PRESENT_IF_AVAILABLE',r['frozen_board_selfcheck_expected_q'])
+          PY
       - name: Compile and test C++11 MLP numeric parity and Q16 callback
         run: |
           g++ -std=c++11 -O2 -Wall -Wextra -Werror -pedantic \
