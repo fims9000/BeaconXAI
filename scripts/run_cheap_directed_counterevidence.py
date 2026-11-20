@@ -125,8 +125,11 @@ def run(args):
     ranker=fit_pairwise_top3_surrogate(F,Y,topk=3,cost=args.pairwise_c)
     training_queries=calls["examples"]
 
+    outer_sampling_seed=getattr(args,"test_sampling_seed",None)
+    if outer_sampling_seed is None:
+        outer_sampling_seed=args.seed+301
     raw_test,test_subj,indices=subset_by_subject(
-        xtest,sv,np.unique(sv),args.windows_per_subject,args.seed+301)
+        xtest,sv,np.unique(sv),args.windows_per_subject,outer_sampling_seed)
     test=apply_standardizer(raw_test,mu,sigma)
     baselines=model(test)
     methods=[
@@ -218,6 +221,7 @@ def run(args):
         "fit_pairwise_valid_windows":ranker.fitting_windows,
         "fit_pairwise_discarded_ties":ranker.discarded_tied_windows,
         "test_windows":total_evaluated,
+        "outer_test_window_sampling_seed":int(outer_sampling_seed),
         "test_counterexample_eligible_windows":n_eligible,
         "eligible_fraction":n_eligible/total_evaluated,
         "M":36,"Q":args.q,
@@ -252,6 +256,8 @@ def main():
     p.add_argument("--out-dir",type=Path,required=True)
     p.add_argument("--model",choices=("raw_mlp","extratrees"),default="raw_mlp")
     p.add_argument("--seed",type=int,default=57)
+    p.add_argument("--test-sampling-seed",type=int,
+                   help="Freeze outer-test windows across train-role seeds")
     p.add_argument("--trees",type=int,default=120)
     p.add_argument("--windows-per-subject",type=int,default=6)
     p.add_argument("--q",type=int,default=16)
