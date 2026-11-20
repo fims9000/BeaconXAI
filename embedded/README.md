@@ -3,7 +3,7 @@
 1. Export policy header:
 
 ```bash
-cd /home/lebedeffson/Code/BeaconXAI
+cd /path/to/BeaconXAI
 .venv/bin/python scripts/export_policy_to_cpp.py \
   --bundle-dir outputs_composite/part2_q64_features_v9_n1500 \
   --out-header embedded/beacon_policy.h
