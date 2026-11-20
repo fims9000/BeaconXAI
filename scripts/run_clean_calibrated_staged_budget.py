@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import pickle
 import sys
 import time
 from pathlib import Path
@@ -66,13 +65,31 @@ def fit_predictor(train_raw: np.ndarray, train_y: np.ndarray,
         or not set(np.unique(train_y)).issubset(set(labels))):
         raise ValueError("invalid class mapping")
     n_classes=int(max(labels.max(),np.max(train_y)))+1
+    # Hash learned numeric parameters instead of pickle metadata:
+    # stable across processes, independent of Python object addresses.
+    model_hasher=hashlib.sha256()
+    model_hasher.update(np.ascontiguousarray(labels).tobytes())
+    model_hasher.update(type(clf).__qualname__.encode("utf8"))
+    learned_tensors=[]
+    if hasattr(clf,"coefs_") and hasattr(clf,"intercepts_"):
+        learned_tensors=list(clf.coefs_)+list(clf.intercepts_)
+    elif hasattr(clf,"estimators_"):
+        for tree_est in clf.estimators_:
+            tree=tree_est.tree_
+            learned_tensors.extend((tree.children_left,tree.children_right,
+                                    tree.feature,tree.threshold,tree.value))
+    for tensor in learned_tensors:
+        a=np.ascontiguousarray(tensor)
+        model_hasher.update(str(a.dtype).encode("ascii"))
+        model_hasher.update(np.asarray(a.shape,dtype="<i8").tobytes())
+        model_hasher.update(a.tobytes())
     counted={
         "examples":0,"batches":0,
-        "fitted_model_sha256":hashlib.sha256(
-            pickle.dumps(clf,protocol=4)).hexdigest(),
+        "fitted_model_sha256":model_hasher.hexdigest(),
         "training_standardizer_sha256":hashlib.sha256(
             np.ascontiguousarray(mu).tobytes()+
             np.ascontiguousarray(sigma).tobytes()).hexdigest(),
+        "model_fingerprint_covers_learned_numeric_tensors":bool(learned_tensors),
     }
     def model(xs):
         z=np.asarray(xs)
