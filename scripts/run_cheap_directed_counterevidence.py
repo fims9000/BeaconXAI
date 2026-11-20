@@ -31,6 +31,9 @@ from beaconxai.conformal_evidence import (
 from beaconxai.directed_evidence import (
     signed_fragment_evidence,positive_reference_ranking
 )
+from beaconxai.active_residual_evidence import (
+    fit_residual_conditional,active_counterevidence_from_features
+)
 from scripts.run_clean_calibrated_staged_budget import fit_predictor
 from scripts.run_cheap_conformal_explanations import (
     separate_subject_roles,subset_by_subject,subject_macro
@@ -123,6 +126,9 @@ def run(args):
         fit_usable+=int(np.count_nonzero(opposing>1e-8)>=3)
     ridge=fit_response_surrogate(F,Y,comps,ridge_alpha=args.ridge_alpha)
     ranker=fit_pairwise_top3_surrogate(F,Y,topk=3,cost=args.pairwise_c)
+    residual=fit_residual_conditional(
+        F,Y,comps,ridge_alpha=args.ridge_alpha,
+        temporal_width=2.,empirical_weight=.65,ridge_noise=.05)
     training_queries=calls["examples"]
 
     outer_sampling_seed=getattr(args,"test_sampling_seed",None)
@@ -135,7 +141,7 @@ def run(args):
     methods=[
         "cheap_original_q0","cheap_ridge_q0","cheap_pairwise_q0",
         "original_beacon_q16","signed_ridge_q16","signed_pairwise_q16",
-        "uniform_q16"
+        "active_residual_q16","uniform_q16"
     ]
     rows=[]
     rng=np.random.default_rng(args.seed+91)
@@ -162,6 +168,19 @@ def run(args):
             ranking,opp,sup=selected_signed_scan(
                 x,baseline,comps,selected,model)
             measured[name]=(ranking,opp,sup,selected)
+        # A new ONLINE sequential policy: 8 genuine model probes, update
+        # unqueried counter-response estimates using TRAIN-only residual
+        # covariance, then 8 DIFFERENT probes selected by posterior UCB.
+        # It never receives Q36, external labels or future responses.
+        active=active_counterevidence_from_features(
+            x,baseline,comps,phi,residual,model,paired,
+            q_first=8,q_second=8,uncertainty_bonus=.5)
+        if active.extra_model_evaluations!=args.q or active.forward_batches!=2:
+            raise AssertionError("real adaptive Q8+8 model calls missing")
+        measured["active_residual_q16"]=(
+            active.conditional_ranking_all_components,
+            np.asarray(active.model_measured_positive),
+            np.zeros(args.q),active.candidate_ids)
         # Full-Q36 may be used only for OFFLINE comparison here.
         signed,opposing,supporting=full_signed_scan(x,baseline,comps,model)
         reference,positive_count=positive_reference_ranking(opposing)
@@ -178,6 +197,13 @@ def run(args):
                 actual_positive=None
             top3=set(reference[:3])
             overlap=(len(top3 & set(ranking[:3]))/3 if eligible else None)
+            measured_only_overlap=(
+                len(top3 & set(active.measured_only_ranking[:3]))/3
+                if method=="active_residual_q16" and eligible else None)
+            inferred_unqueried_top3=(
+                sum(v not in set(active.candidate_ids)
+                    for v in ranking[:3])
+                if method=="active_residual_q16" else None)
             rows.append({
                 "subject":int(test_subj[i]),"sample":i,
                 "original_window_index":int(indices[i]),
@@ -189,6 +215,10 @@ def run(args):
                 "top3_in_shortlist":(
                     len(top3 & set(selected))/3 if eligible and q else None),
                 "model_measured_positive_fragments":actual_positive,
+                "active_measured_only_top3_overlap":measured_only_overlap,
+                "active_inferred_unqueried_top3_count":inferred_unqueried_top3,
+                "active_inferred_top3_not_all_directly_probed":bool(
+                    inferred_unqueried_top3) if inferred_unqueried_top3 is not None else None,
                 "counterevidence_peak":float(np.max(opposing)),
                 "support_peak":float(np.max(supporting)),
                 "signed_min":float(np.min(signed)),
@@ -220,6 +250,13 @@ def run(args):
         "fitting_windows":len(sample),
         "fit_pairwise_valid_windows":ranker.fitting_windows,
         "fit_pairwise_discarded_ties":ranker.discarded_tied_windows,
+        "active_residual_training_windows":residual.fitted_windows,
+        "active_residual_covariance_float32_bytes":int(
+            residual.covariance.astype("float32").nbytes),
+        "active_residual_kernel":"65pct empirical PSD residual covariance + 35pct smooth sensor/time PSD kernel",
+        "active_residual_online_queried_stages":[8,8],
+        "active_residual_unqueried_inference_is_not_verified":True,
+        "active_residual_uncertainty_bonus":.5,
         "test_windows":total_evaluated,
         "outer_test_window_sampling_seed":int(outer_sampling_seed),
         "test_counterexample_eligible_windows":n_eligible,
@@ -236,7 +273,8 @@ def run(args):
             "Removing a fragment with interpolation can itself create nonphysical signals.",
             "A positive signed response denotes evidence against the original predicted class only under the specified intervention.",
             "If fewer than three truly positive changes exist, top3-counterevidence localization is undefined and is excluded instead of inventing contradictory fragments.",
-            "Few independent surrogate-fit subjects, no TinyML energy/latency measurement."
+            "Few independent surrogate-fit subjects, no TinyML energy/latency measurement.",
+            "Conditional covariance adjustments are uncalibrated and may rank UNMEASURED effects incorrectly; never call them verified evidence."
         ]
     }
     (out/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf8")
