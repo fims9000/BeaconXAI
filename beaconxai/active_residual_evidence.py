@@ -139,42 +139,6 @@ class ActiveCounterExplanation:
     second_stage_ids: list[int]
 
 
-def run_active_counterevidence(
-    x: np.ndarray, baseline_scores: np.ndarray, components: Sequence,
-    conditional: ResidualConditional, predict_many: Callable,
-    first_stage_score: np.ndarray,
-    q_first:int=8,q_second:int=8,
-    uncertainty_bonus:float=.5,
-) -> ActiveCounterExplanation:
-    """True 8+8 measured calls, no Q36 oracle or held-out test labels.
-
-    The final top-3 MAY contain unmeasured fragments: those are labelled
-    INFERRED and never presented as verified model perturbations.
-    """
-    base=np.asarray(baseline_scores,dtype=float)
-    cheap=np.asarray(first_stage_score,dtype=float)
-    m=len(components)
-    if (x.ndim!=2 or base.ndim!=1 or len(base)<2
-        or cheap.shape!=(m,) or q_first<3 or q_second<1
-        or q_first+q_second>=m or uncertainty_bonus<0
-        or not np.isfinite(x).all() or not np.isfinite(base).all()
-        or not np.isfinite(cheap).all()
-        or not np.isfinite(uncertainty_bonus)):
-        raise ValueError("invalid active BEACON Q8/Q16 inputs")
-    source=int(np.argmax(base))
-    features=cheap_feature_matrix(
-        x,conditional.class_profile,base,components) if hasattr(
-            conditional,'class_profile') else None
-    # The caller must pass feature_matrix already computed from
-    # training-only mean of ORIGINAL predicted class; avoid silently
-    # guessing the class mean inside this budgeted algorithm.
-    if features is None:
-        raise ValueError("provide feature_matrix to online active audit")
-    return _run_active_with_features(x,base,components,conditional,
-                                     predict_many,cheap,features,
-                                     q_first,q_second,uncertainty_bonus)
-
-
 def active_counterevidence_from_features(
     x: np.ndarray, baseline_scores: np.ndarray, components: Sequence,
     cheap_features: np.ndarray, conditional: ResidualConditional,
