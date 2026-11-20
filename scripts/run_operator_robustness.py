@@ -89,7 +89,8 @@ def study(args):
         medoid=np.stack([make_target_replacement(
             x,c,j,b,"medoid",bank,comps,taper=2)[0] for j,c in enumerate(comps)])
         full_interp=rank_effects(moving_margin_effects(original,model(interpolated)),list(range(M)))
-        full_medoid=rank_effects(moving_margin_effects(original,model(medoid)),list(range(M)))
+        medoid_effects=moving_margin_effects(original,model(medoid))
+        full_medoid=rank_effects(medoid_effects,list(range(M)))
         cheap=class_cheap(x,profiles[a][0],comps)[2]
         selected=best_q(cheap,args.budget)
         qmed=rank_effects(moving_margin_effects(original,model(medoid[selected])),selected)
@@ -98,7 +99,7 @@ def study(args):
             M,args.budget,replace=False).astype(int).tolist()
         qrand=rank_effects(moving_margin_effects(original,model(medoid[random_selected])),
                            random_selected)
-        s=np.sort(moving_margin_effects(original,model(medoid)))
+        s=np.sort(medoid_effects)
         refmax=float(s[-1]);gap=float(s[-3]-s[-4])
         methods=(
             ("medoid_q16",qmed,args.budget),
