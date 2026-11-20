@@ -39,41 +39,57 @@ inline bool standardize_channels(
   return true;
 }
 
+// Return raw pre-softmax logits. No output labels are inspected here.
+template <size_t InputDim, size_t HiddenDim, size_t OutputDim>
+inline bool predict_logits(
+    const float* standardized_input, size_t length,
+    const float* w1, const float* b1,
+    const float* w2, const float* b2,
+    float* out_logits) {
+  if (!standardized_input || !w1 || !b1 || !w2 || !b2 || !out_logits
+      || InputDim < 1 || HiddenDim < 1 || OutputDim < 2
+      || length != InputDim) return false;
+  float hidden[HiddenDim];
+  for (size_t j=0;j<HiddenDim;++j) {
+    float accum=b1[j];
+    for (size_t i=0;i<InputDim;++i) {
+      if (!std::isfinite(standardized_input[i])) return false;
+      accum+=standardized_input[i]*w1[i*HiddenDim+j];
+    }
+    if (!std::isfinite(accum))return false;
+    hidden[j]=accum>0.0f?accum:0.0f;
+  }
+  for (size_t k=0;k<OutputDim;++k) {
+    float accum=b2[k];
+    for (size_t j=0;j<HiddenDim;++j)
+      accum+=hidden[j]*w2[j*OutputDim+k];
+    if (!std::isfinite(accum))return false;
+    out_logits[k]=accum;
+  }
+  return true;
+}
+
+// The top-two log-probability margin equals the top-two pre-softmax
+// logit difference for any valid softmax model (before probability clipping).
 template <size_t InputDim, size_t HiddenDim, size_t OutputDim>
 inline bool predict_top2_log_margin(
     const float* standardized_input, size_t length,
     const float* w1, const float* b1,
     const float* w2, const float* b2,
     float* out_margin) {
-  if (!standardized_input || !w1 || !b1 || !w2 || !b2 || !out_margin
-      || InputDim < 1 || HiddenDim < 1 || OutputDim < 2
-      || length != InputDim) return false;
-
-  float hidden[HiddenDim];
-  for (size_t j=0; j<HiddenDim; ++j) {
-    float accum = b1[j];
-    for (size_t i=0; i<InputDim; ++i)
-      accum += standardized_input[i]*w1[i*HiddenDim+j];
-    if (!std::isfinite(accum)) return false;
-    hidden[j] = accum > 0.0f ? accum : 0.0f;
-  }
-
-  float largest=-INFINITY;
-  float second=-INFINITY;
-  for (size_t k=0; k<OutputDim; ++k) {
-    float accum=b2[k];
-    for (size_t j=0; j<HiddenDim; ++j)
-      accum += hidden[j]*w2[j*OutputDim+k];
-    if (!std::isfinite(accum)) return false;
-    if (accum >= largest) {
+  if (!out_margin) return false;
+  float logits[OutputDim];
+  if (!predict_logits<InputDim,HiddenDim,OutputDim>(
+      standardized_input,length,w1,b1,w2,b2,logits))return false;
+  float largest=-INFINITY,second=-INFINITY;
+  for (size_t k=0;k<OutputDim;++k) {
+    if (logits[k]>=largest) {
       second=largest;
-      largest=accum;
-    } else if (accum > second) {
-      second=accum;
-    }
+      largest=logits[k];
+    } else if (logits[k]>second) second=logits[k];
   }
-  if (!std::isfinite(largest) || !std::isfinite(second)) return false;
-  *out_margin = largest-second;
+  if (!std::isfinite(largest) || !std::isfinite(second))return false;
+  *out_margin=largest-second;
   return std::isfinite(*out_margin);
 }
 
