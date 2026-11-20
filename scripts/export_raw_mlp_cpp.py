@@ -27,16 +27,24 @@ from beaconxai.resource_accounting import mlp_resource_projection
 from beaconxai.cpp_adaptive_v2_export import (
     render_class_means_header, save_baseline_q16_fixture,
     render_board_reference_window_header,
+    render_staged_upgrade_policy_header,save_staged_upgrade_fixture,
 )
 from beaconxai.contrastive import fit_class_profiles, make_components, neutralize_interp
 from scripts.run_q16_matched_ablation import class_cheap, best_q
+from scripts.run_clean_calibrated_staged_budget import calibrate_inner
+from beaconxai.staged_budget import (
+    StagedPolicy,fit_constrained_upgrade,run_staged_audit,
+)
 
 
 def run(args):
     fn=Path(args.npz_path)
+    if getattr(args,"staged_parity",False) and not getattr(args,"adaptive_parity",False):
+        raise ValueError("staged parity requires baseline adaptive parity")
     xt,yt,xv,_=load_npz_dataset(fn)
     with np.load(fn) as z:
-        train_subjects=set(map(int,np.unique(z["subject_train"])))
+        train_subject_array=z["subject_train"].astype(int)
+        train_subjects=set(map(int,np.unique(train_subject_array)))
         test_subjects=set(map(int,np.unique(z["subject_test"])))
         subject_test=z["subject_test"].astype(int)
     if train_subjects&test_subjects:
@@ -78,6 +86,7 @@ def run(args):
         n_classes=len(classes),n_components=36,query_budget=16)
     discrepancy=np.abs(logit_gap-logp_gap)
     adaptive_info=None
+    staged_info=None
     if getattr(args, "adaptive_parity", False):
         q=16
         components=make_components(parity_x.shape[1:],12,"pamap3")
@@ -138,6 +147,66 @@ def run(args):
             np.asarray(selected_sets[0]),np.asarray(reference_ranks[0]))
         (out/"beacon_board_reference.hpp").write_text(
             reference_header,encoding="utf8")
+        if getattr(args,"staged_parity",False):
+            # Threshold and any decision to upgrade are FIT strictly on
+            # inner held-out subjects of the official training partition.
+            _,_,inner_rows=calibrate_inner(
+                xt,yt,train_subject_array,"raw_mlp",
+                args.seed,120,72,.75,components)
+            trained_rule,training_receipt=fit_constrained_upgrade(
+                inner_rows,max_mean_q=20.,min_gain=.01,
+                min_excess_over_random=.01)
+            threshold=(trained_rule.threshold_q16
+                       if trained_rule.mode=="upgrade16" else 0.)
+            threshold_header=render_staged_upgrade_policy_header(threshold)
+            (out/"beacon_staged_policy.hpp").write_text(
+                threshold_header,encoding="utf8")
+            real_q=[]
+            real_gap=[]
+            real_sep=[]
+            real_selected=[]
+            real_ranks=[]
+            def predict_many(batch):
+                z=np.asarray(batch)
+                probs=model.predict_proba(z.reshape(len(z),-1))
+                return np.log(np.clip(probs,1e-12,1))
+            for i,x in enumerate(parity_x):
+                cls=source_classes[i]
+                prior=class_cheap(x,class_means[cls],components)[2]
+                res=run_staged_audit(
+                    x,components,prior,lp[i],predict_many,
+                    StagedPolicy("upgrade16",threshold_q16=threshold))
+                if res.queries not in (16,32) or len(res.measured_effects)!=res.queries:
+                    raise AssertionError("bad original staged Q16/Q32 parity")
+                effects=np.asarray(res.measured_effects)
+                smallest=float(min(
+                    abs(float(effects[u]-effects[v]))
+                    for u in range(len(effects))
+                    for v in range(u+1,len(effects))))
+                real_q.append(res.queries)
+                real_gap.append(res.stage_features[16])
+                real_sep.append(smallest)
+                real_selected.append(res.selected)
+                real_ranks.append(res.ranking)
+            save_staged_upgrade_fixture(
+                out/"staged_q16_q32_parity.bin",xv[idx],
+                np.asarray(source_classes),np.asarray(real_q),
+                np.asarray(real_gap),np.asarray(real_sep),
+                real_selected,real_ranks)
+            staged_info={
+                "rule":trained_rule.__dict__,
+                "trained_gap_threshold":threshold,
+                "n_parity_windows":len(real_q),
+                "n_upgraded_to_q32":sum(int(q==32) for q in real_q),
+                "total_actual_sequential_model_examples":int(sum(real_q)),
+                "python_min_observed_gap":float(min(real_gap)),
+                "python_max_observed_gap":float(max(real_gap)),
+                "inner_validation_subjects":training_receipt[
+                    "calibration_subjects"],
+                "threshold_fitted_only_on_official_training_subjects":True,
+                "test_labels_and_full_Q36_never_enter_online_rule":True,
+                "no_physical_MCU_results":True,
+            }
         adaptive_info={
             "reference":"Original Python adaptive_v2 _component_cheap_scores"
                 " + np.argpartition(-prior) + moving top-two log-prob margin",
@@ -180,6 +249,7 @@ def run(args):
         "cpp_training_mu_sigma_parity_required":True,
         "not_firmware_or_MCU_validated":True,
         "adaptive_v2_baseline_parity":adaptive_info,
+        "optional_staged_q16_q32_parity":staged_info,
     }
     (out/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf8")
     print(json.dumps({
@@ -201,6 +271,8 @@ def main():
     p.add_argument("--parity-samples",type=int,default=12)
     p.add_argument("--adaptive-parity",action="store_true",
                    help="Export training class means plus original Q16 set/rank fixtures")
+    p.add_argument("--staged-parity",action="store_true",
+                   help="Export optional train-calibrated Q16->Q32 C++ parity fixture")
     run(p.parse_args())
 
 
