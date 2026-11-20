@@ -57,8 +57,23 @@ def run(args) -> None:
     test = apply_standardizer(xv[idx], mu, std)
     comps = make_components(test.shape[1:], args.time_bins, "pamap3")
     M = len(comps)
-    if args.budget < 3 or args.budget >= M:
-        raise ValueError("Need 3 <= Q < M for independent full-budget reference")
+    grid_spec = getattr(args, "q_grid", "")
+    if grid_spec:
+        budgets = [int(part.strip()) for part in grid_spec.split(",")]
+        if not budgets or len(budgets) != len(set(budgets)):
+            raise ValueError("Budget grid must contain unique integers")
+        plans = [("adaptive_v2_cheap_q0", "adaptive_v2_cheap_q0", 0)]
+        for q in budgets:
+            for method in METHODS:
+                if method.endswith("_q0"):
+                    continue
+                plans.append((method.replace("_q16", f"_q{q}"), method, q))
+    else:
+        budgets = [args.budget]
+        plans = [(method, method, 0 if method.endswith("_q0") else args.budget)
+                 for method in METHODS]
+    if any(q < 3 or q >= M for q in budgets):
+        raise ValueError("Need 3 <= Q < M for full-budget reference comparisons")
     t0 = time.perf_counter()
     model_type = getattr(args, "model", "extratrees")
     if model_type == "extratrees":
@@ -116,18 +131,20 @@ def run(args) -> None:
             "reference_changed_by_ge_001": int(max_change >= .01),
             "reference_top3_tie": int(cutoff_gap <= 1e-6),
         })
-        for method in METHODS:
+        for label, method, q in plans:
+            # Every strategy/budget is evaluated directly, not inferred from
+            # the complete Q=M responses used as the offline reference.
             order, extra, duration = evaluate_one_method(
                 method, x, comps, profiles, predict_many, baseline[i],
-                args.budget, seed=args.seed + 100003*i
+                q if q else budgets[0], seed=args.seed + 100003*i
             )
-            if extra != (0 if method.endswith("_q0") else args.budget):
+            if extra != q:
                 raise AssertionError("Incorrect Q accounting")
             metrics = reference_metrics(reference, order, M, extra)
             rows.append({
                 "sample": i, "subject": int(subj[i]),
                 "original_window_index": int(idx[i]),
-                "method": method, "extra_model_evaluations": extra,
+                "method": label, "extra_model_evaluations": extra,
                 "runtime_ms": 1000*duration,
                 "reference_max_shift": max_change,
                 "reference_top3_gap": cutoff_gap,
@@ -161,10 +178,12 @@ def run(args) -> None:
         "test_subjects": sorted(map(int,np.unique(sv))),
         "per_subject_windows": {str(s):int((subj==s).sum()) for s in np.unique(subj)},
         "n_windows": len(test), "M": M, "Q": args.budget,
+        "budget_grid": budgets,
+        "budget_grid_evaluated_directly_not_simulated": True,
         "additional_reference_queries_per_window_offline": M,
         "cached_baseline_queries_per_window": 1,
         "additional_model_queries_by_method": {
-            method: (0 if method.endswith("_q0") else args.budget) for method in METHODS
+            label: q for label, _, q in plans
         },
         "no_test_labels_or_reference_ranks_passed_to_methods": True,
         "reference_stability_exploratory_thresholds": {
@@ -200,6 +219,7 @@ def main():
     p.add_argument("--max-test",type=int,default=128)
     p.add_argument("--time-bins",type=int,default=12)
     p.add_argument("--budget",type=int,default=16)
+    p.add_argument("--q-grid",default="",help="Optional comma-separated Q, e.g. 8,16,32")
     p.add_argument("--trees",type=int,default=120)
     p.add_argument("--model",choices=("extratrees","raw_mlp"),default="extratrees")
     p.add_argument("--seed",type=int,default=57)
