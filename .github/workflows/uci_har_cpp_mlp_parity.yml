@@ -56,7 +56,7 @@ jobs:
           python -u scripts/export_raw_mlp_cpp.py \
             --npz-path data/uci_har_official_subjects.npz \
             --out-dir outputs_composite/uci_har_mlp_cpp \
-            --parity-samples 32 --seed 57 --adaptive-parity
+            --parity-samples 96 --seed 57 --adaptive-parity
       - name: Compile and test C++11 MLP numeric parity and Q16 callback
         run: |
           g++ -std=c++11 -O2 -Wall -Wextra -Werror -pedantic \
