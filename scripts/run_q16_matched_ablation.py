@@ -32,6 +32,7 @@ from beaconxai.contrastive import (
 )
 from beaconxai.subject_sampling import balanced_subject_sample, inject_subject_balanced
 from beaconxai.rank_fusion import fuse_tested_ranks
+from beaconxai.patch_diagnostics import patch_effects, summarize_patch_effects, summarize_method_effects
 from beaconxai.candidate_selection import stratified_top_q
 from scripts.run_adaptive_v2_localization import _component_cheap_scores
 from scripts.run_contrastive_q16 import mask_ranking, ranking_metrics
@@ -247,6 +248,7 @@ def run(args):
         raise ValueError("No injected windows produced")
     if set(map(int, np.unique(subject_test[injected_idx]))) != all_subjects:
         raise AssertionError("Subject omitted by balanced synthetic injection")
+    clean_reference = x_test[injected_idx].copy()
     x_eval = x_eval[injected_idx]
     y_truth = true_components[injected_idx]
     subject_eval = subject_test[injected_idx]
@@ -256,6 +258,16 @@ def run(args):
         return np.log(np.clip(probs, 1e-12, 1))
     # Original prediction: exactly one shared cached model evaluation per window.
     original = predict_many(x_eval)
+    # Offline patch-effect analysis. Reference model calls are not charged to
+    # any Q16 explanation method or to the prospective selector.
+    clean_outputs = predict_many(clean_reference)
+    effect_rows = patch_effects(
+        clean_reference, x_eval, clean_outputs, original, y_truth, components
+    )
+    for i, effect in enumerate(effect_rows):
+        effect["subject"] = int(subject_eval[i])
+        effect["original_window_index"] = int(chosen[injected_idx[i]])
+        effect["clean_activity_label"] = int(y_test[injected_idx[i]])
     rows = []
     for trial in range(args.repeats):
         for i, x in enumerate(x_eval):
@@ -268,6 +280,10 @@ def run(args):
                 if q_used not in (0, args.budget):
                     raise AssertionError("Incorrect model-evaluation accounting")
                 met = ranking_metrics(ordering, int(y_truth[i]), len(components))
+                # A direct candidate shortlist has exactly Q individually
+                # neutralized/queried components; coalition controls do not.
+                retrieved = (int(int(y_truth[i]) in ordering)
+                             if q_used and len(ordering) == q_used else "")
                 rows.append({
                     "trial": trial, "sample": i,
                     "original_window_index": int(chosen[injected_idx[i]]),
@@ -275,16 +291,24 @@ def run(args):
                     "method": method, "true_component": int(y_truth[i]),
                     "extra_model_evaluations": q_used,
                     "runtime_ms": 1000.0 * elapsed,
+                    "candidate_covered": retrieved,
                     **met,
+                    **{k: v for k, v in effect_rows[i].items()
+                       if k not in ("sample", "true_component")},
                 })
         print(f"completed {trial+1}/{args.repeats}, {len(x_eval)} injected windows", flush=True)
 
     per_method, per_subject = summarize(rows)
+    per_patch_subject = summarize_patch_effects(effect_rows, subject_eval)
+    per_method_effects = summarize_method_effects(rows)
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     write_csv(out/"per_sample.csv", rows)
     write_csv(out/"summary.csv", per_method)
     write_csv(out/"per_subject.csv", per_subject)
+    write_csv(out/"patch_effects.csv", effect_rows)
+    write_csv(out/"patch_effects_per_subject.csv", per_patch_subject)
+    write_csv(out/"method_effects_per_subject.csv", per_method_effects)
     info = {
         "data": "UCI PAMAP2", "source_npz_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "model": "ExtraTrees(120) on _anfis_features; source script's seed=42",
@@ -296,6 +320,14 @@ def run(args):
         },
         "M": len(components), "time_bins": args.time_bins,
         "q_additional": args.budget, "baseline_cached_per_window": 1,
+        "clean_reference_evaluations_per_window_diagnostics_only": 1,
+        "patch_effect_diagnostics": {
+            "model_effect": "total_variation(predicted class distributions, clean, patched)",
+            "thresholds_exploratory": [0.05, 0.10],
+            "conditional_metrics": "posthoc descriptive; unconditional hit@3 remains primary",
+            "shortlist": "direct Q individually perturbed components only",
+            "no_test_label_passed_to_explanation": True
+        },
         "subject_dependence_warning": "Per-subject descriptive only; two subjects do not support generalization inference",
         "model_evaluation": "Q examples processed in one batch per method; one cached baseline per window",
         "neutralizer": "Original repository's per-component interpolation for all Q16 methods",
@@ -321,6 +353,18 @@ def run(args):
         print(f"{r['method']:27s} Q={r['extra_model_evaluations']:2d} "
               f"hit3={r['hit3']:.4f} subj_macro={r['subject_macro_hit3']:.4f} "
               f"median_ms={r['runtime_ms_median']:.2f}", flush=True)
+    for e in per_patch_subject:
+        print(f"PATCH SUBJECT {e['subject']} n={e['windows']} "
+              f"TV>=.05={e['tv_ge_005_rate']:.4f} "
+              f"switch={e['prediction_change_rate']:.4f} "
+              f"meanTV={e['tv_mean']:.4f}", flush=True)
+    for d in per_method_effects:
+        if d["method"] in ("adaptive_v2_original_q16",
+                            "adaptive_v2_time_balanced_q16", "uniform_q16"):
+            print(f"CANDIDATE SUBJECT {d['subject']} {d['method']} "
+                  f"covered={d['direct_shortlist_coverage']} "
+                  f"hit3_when_TVge.05={d['hit3_tv_ge_005']} "
+                  f"n_high_effect={d['n_tv_ge_005_windows']}", flush=True)
     for s in per_subject:
         if s["method"] in ("adaptive_v2_original_q16", "adaptive_v2_fixed_pair_q16",
                            "contrastive_q16", "uniform_q16"):
