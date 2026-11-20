@@ -27,12 +27,15 @@ sys.path.insert(0,str(ROOT))
 from beaconxai.contrastive import fit_class_profiles, make_components, neutralize_interp
 from beaconxai.datasets import apply_standardizer, fit_channel_standardizer, load_npz_dataset
 from beaconxai.sensitivity_reference import moving_margin_effects, rank_effects, reference_metrics
-from beaconxai.staged_budget import StagedPolicy,fit_staged_policy,run_staged_audit
+from beaconxai.staged_budget import (
+    StagedPolicy,fit_staged_policy,fit_constrained_upgrade,run_staged_audit,
+)
 from beaconxai.subject_sampling import balanced_subject_sample
 from scripts.run_component_conflict_benchmark import _anfis_features,_train_extratrees_local
 from scripts.run_q16_matched_ablation import class_cheap,write_csv
 
-METHODS=("statistical_q0","fixed_q8","fixed_q16","fixed_q32","calibrated_policy")
+METHODS=("statistical_q0","fixed_q8","fixed_q16","fixed_q32",
+         "calibrated_policy","constrained_upgrade16","random_at_matched_budget")
 
 
 def fit_predictor(train_raw: np.ndarray, train_y: np.ndarray,
@@ -203,6 +206,13 @@ def run(args):
     policy,selection,calib_rows=calibrate_inner(
         xtrain,ytrain,st,args.model,args.seed,args.trees,
         args.max_calib,args.penalty,components)
+    # Independent, prespecified safety-first analysis: never below Q16,
+    # permit up to 25% Q32 upgrades on inner validation only.
+    upgrade_policy,upgrade_fit=fit_constrained_upgrade(
+        calib_rows,max_mean_q=20.,min_gain=.01,
+        min_excess_over_random=.01)
+    random_rate=upgrade_fit["random_upgrade_probability_calibrated"]
+    random_source=np.random.default_rng(args.seed+2027)
     t0=time.perf_counter()
     mu,sigma,profiles,model,counts=fit_predictor(
         xtrain,ytrain,args.model,args.seed,args.trees)
@@ -221,6 +231,14 @@ def run(args):
         deployed=run_staged_audit(x,components,prior,baseline[i],model,policy)
         if deployed.queries not in (8,16,32):
             raise AssertionError("invalid selected online Q")
+        upgrade=run_staged_audit(
+            x,components,prior,baseline[i],model,upgrade_policy)
+        # Random budget comparator is prospective, independent of the
+        # full-Q36 reference; actual Q16/Q32 calls are executed.
+        random_policy=StagedPolicy(
+            "fixed32" if random_source.random()<random_rate else "fixed16")
+        random_control=run_staged_audit(
+            x,components,prior,baseline[i],model,random_policy)
         reference,reference_gap,reference_max=full_reference(
             x,baseline[i],components,model)
         controls={}
@@ -231,7 +249,8 @@ def run(args):
             if controls[q].queries!=q:
                 raise AssertionError("control budget not executed")
         true_calls=counts["examples"]-before
-        expected_calls=deployed.queries+36+8+16+32
+        expected_calls=(
+            deployed.queries+upgrade.queries+random_control.queries+36+8+16+32)
         if true_calls!=expected_calls:
             raise AssertionError(
                 f"model-call accounting: actual={true_calls}, planned={expected_calls}")
@@ -244,6 +263,10 @@ def run(args):
             ("fixed_q32",controls[32].ranking,32,controls[32].actual_forward_batches),
             ("calibrated_policy",deployed.ranking,deployed.queries,
              deployed.actual_forward_batches),
+            ("constrained_upgrade16",upgrade.ranking,upgrade.queries,
+             upgrade.actual_forward_batches),
+            ("random_at_matched_budget",random_control.ranking,
+             random_control.queries,random_control.actual_forward_batches),
         ]
         for name,rank,q,batches in methods:
             metrics=reference_metrics(reference,rank,len(components),q)
@@ -256,6 +279,9 @@ def run(args):
                 "stage8_measured_gap":deployed.stage_features.get(8,""),
                 "stage16_measured_gap":deployed.stage_features.get(16,""),
                 "selected_policy":policy.mode,
+                "constrained_upgrade_policy":upgrade_policy.mode,
+                "upgrade16_stage16_observed_gap":upgrade.stage_features.get(16,""),
+                "random_expected_upgrade_probability":random_rate,
                 "estimated_top3":",".join(map(str,rank[:3])),
                 "offline_full_top3":",".join(map(str,reference[:3])),
                 **metrics,
@@ -274,7 +300,11 @@ def run(args):
     write_csv(out/"summary.csv",summary)
     write_csv(out/"inner_calibration_windows.csv",calib_rows)
     (out/"inner_calibration.json").write_text(
-        json.dumps({"policy":policy.__dict__,"fit":selection},indent=2),encoding="utf8")
+        json.dumps({
+            "policy":policy.__dict__,"fit":selection,
+            "constrained_upgrade_policy":upgrade_policy.__dict__,
+            "constrained_upgrade_fit":upgrade_fit,
+        },indent=2),encoding="utf8")
     m={
         "dataset":"UCI HAR official train/test subject partition",
         "npz_sha256":hashlib.sha256(path.read_bytes()).hexdigest(),
@@ -292,9 +322,20 @@ def run(args):
         "per_subject_windows":{
             str(t):int(np.sum(subjects==t)) for t in np.unique(subjects)},
         "selected_policy":policy.__dict__,
+        "constrained_upgrade_policy":upgrade_policy.__dict__,
+        "constrained_upgrade_calibration":upgrade_fit,
+        "random_upgrade_rate_frozen_from_inner_validation":random_rate,
+        "random_budget_comparator_executes_real_model_probes":True,
+        "random_budget_expected_not_forced_equal_per_outer_sample":True,
         "calibration_penalty_per_32_queries":args.penalty,
         "outer_model_training_seconds":outer_model_fit_seconds,
         "deployed_staged_queries_actual":explicit_query_total,
+        "constrained_upgrade_queries_actual":sum(
+            r["extra_model_evaluations"] for r in rows
+            if r["method"]=="constrained_upgrade16"),
+        "random_budget_queries_actual":sum(
+            r["extra_model_evaluations"] for r in rows
+            if r["method"]=="random_at_matched_budget"),
         "full_Q36_offline_queries":len(test)*36,
         "fixed_Q8_Q16_Q32_offline_control_queries":len(test)*(8+16+32),
         "outer_cached_baseline_queries":len(test),
