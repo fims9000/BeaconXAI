@@ -4,6 +4,7 @@ import pytest
 from beaconxai.contrastive import make_components
 from beaconxai.conformal_evidence import (
     cheap_feature_matrix, full_model_responses,fit_response_surrogate,
+    fit_pairwise_top3_surrogate,
     calibrate_subject_bound,SubjectBound,affordable_certificate,
     run_certified_explanation,
 )
@@ -158,3 +159,32 @@ def test_invalid_uncovered_bounds_cannot_promise_correct_top3():
     assert not np.all(truth<=b.upper(fabricated,np.ones(36)))
     assert result.certified
     assert set(result.ranked[:3])!=set(np.argsort(-truth)[:3])
+
+
+def test_pairwise_top3_objective_learns_ranks_and_avoids_expensive_calls():
+    rng=np.random.default_rng(41)
+    feats=[]
+    effects=[]
+    for _ in range(8):
+        f=rng.normal(size=(36,17))
+        v=.15*np.arange(36)/36 + f[:,0]*.8 - f[:,1]*.5
+        vals=np.maximum(0.,v-v.min()+.1)
+        feats.append(f)
+        effects.append(vals)
+    ranker=fit_pairwise_top3_surrogate(feats,effects,topk=3,cost=1.)
+    assert ranker.feature_count==17
+    assert ranker.fitting_windows==8
+    assert ranker.training_pairs==8*3*33
+    score=ranker.score(feats[0])
+    oracle=np.argsort(-effects[0])[:3]
+    predicted=np.argsort(-score)[:3]
+    assert len(set(oracle)&set(predicted))>=2
+    with pytest.raises(ValueError):
+        ranker.score(feats[0][:,:2])
+
+
+def test_pairwise_ranker_refuses_made_up_order_from_exact_ties():
+    feats=[np.zeros((36,17)) for _ in range(4)]
+    y=[np.ones(36) for _ in range(4)]
+    with pytest.raises(ValueError,match="ambiguous"):
+        fit_pairwise_top3_surrogate(feats,y)
