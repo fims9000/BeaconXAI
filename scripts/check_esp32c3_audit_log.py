@@ -47,12 +47,81 @@ def evaluate_uart_log(text: str) -> dict:
     }
 
 
+def evaluate_staged_uart_log(text: str) -> dict:
+    """Validate the optional Q16/Q32 build's serial receipt format.
+
+    A text log is caller-provided evidence, not cryptographic proof that
+    physical hardware ran. A real capture is required for hardware claims.
+    """
+    banner="BEACON_ADAPTIVE_V2_STAGED_EXPERIMENTAL_ESP32C3"
+    if banner not in text or text.count(banner)!=1:
+        raise ValueError("not a unique staged ESP32-C3 serial log")
+    # Only accept values after this exact boot banner, preventing accidental
+    # mixture with an earlier baseline Q16 or stale staged run.
+    section=text.split(banner,1)[1]
+    if section.count("DONE")!=1:
+        raise ValueError("truncated or mixed staged ESP32-C3 UART log")
+    section=section.split("DONE",1)[0]
+    m=re.search(
+        r"^STAGED callback_ok=(\\d+) actual_model_calls=(\\d+) "
+        r"expected_calls=(\\d+) class=(\\d+) expected_class=(\\d+)$",
+        section,re.MULTILINE)
+    checks=re.search(
+        r"^SELFTEST class=(PASS|FAIL) candidate_set=(PASS|FAIL) "
+        r"top3_set=(PASS|FAIL) budget=(PASS|FAIL) gap16=(PASS|FAIL)$",
+        section,re.MULTILINE)
+    timing=re.search(
+        r"^BOARD_EXPERIMENT one_window_staged_latency_us=(\\d+)$",
+        section,re.MULTILINE)
+    memory=re.search(
+        r"^BOARD_EXPERIMENT free_heap_8bit=(\\d+) "
+        r"minimum_free_heap_8bit=(\\d+)$",
+        section,re.MULTILINE)
+    disclaimer=("NO_ENERGY_MEASUREMENT NO_FULL_PEAK_RAM_CERTIFICATION"
+                in section)
+    if not all((m,checks,timing,memory,disclaimer)):
+        raise ValueError("truncated staged callback or missing telemetry")
+    actual_q=int(m.group(2))
+    expected_q=int(m.group(3))
+    predicted=int(m.group(4))
+    intended=int(m.group(5))
+    latency=int(timing.group(1))
+    heap_free=int(memory.group(1))
+    heap_min=int(memory.group(2))
+    if (m.group(1)!="1" or expected_q not in (16,32)
+        or actual_q!=expected_q or predicted!=intended
+        or any(value!="PASS" for value in checks.groups())
+        or latency<=0 or heap_min<=0 or heap_free<heap_min):
+        raise ValueError("staged ESP32-C3 functional self-test failed")
+    return {
+        "target":"ESP32-C3 optional train-calibrated Q16/Q32",
+        "physical_board_log_required":True,
+        "receipt_text_alone_does_not_prove_physical_origin":True,
+        "selftest_success":True,
+        "model_evaluations":actual_q,
+        "expected_model_evaluations":expected_q,
+        "predicted_class":predicted,
+        "one_window_latency_us":latency,
+        "free_heap_8bit_after_audit":heap_free,
+        "minimum_free_heap_8bit_observed":heap_min,
+        "not_peak_total_RAM":True,
+        "energy_joules":None,
+        "no_external_explanation_ground_truth":True,
+        "n_independent_timing_windows":1,
+        "optional_not_default_q16":True,
+    }
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--uart-log",type=Path,required=True)
     parser.add_argument("--out",type=Path)
+    parser.add_argument("--mode",choices=("baseline","staged"),default="baseline",
+                        help="Expected compiled firmware variant (default: baseline Q16)")
     args=parser.parse_args()
-    metrics=evaluate_uart_log(args.uart_log.read_text(encoding="utf8",errors="replace"))
+    raw=args.uart_log.read_text(encoding="utf8",errors="replace")
+    scorer=(evaluate_staged_uart_log if args.mode=="staged" else evaluate_uart_log)
+    metrics=scorer(raw)
     result=json.dumps(metrics,ensure_ascii=False,indent=2)
     if args.out:
         args.out.parent.mkdir(parents=True,exist_ok=True)
