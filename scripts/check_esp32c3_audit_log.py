@@ -63,19 +63,19 @@ def evaluate_staged_uart_log(text: str) -> dict:
         raise ValueError("truncated or mixed staged ESP32-C3 UART log")
     section=section.split("DONE",1)[0]
     m=re.search(
-        r"^STAGED callback_ok=(\\d+) actual_model_calls=(\\d+) "
-        r"expected_calls=(\\d+) class=(\\d+) expected_class=(\\d+)$",
+        r"^STAGED callback_ok=(\d+) actual_model_calls=(\d+) "
+        r"expected_calls=(\d+) class=(\d+) expected_class=(\d+)$",
         section,re.MULTILINE)
     checks=re.search(
         r"^SELFTEST class=(PASS|FAIL) candidate_set=(PASS|FAIL) "
         r"top3_set=(PASS|FAIL) budget=(PASS|FAIL) gap16=(PASS|FAIL)$",
         section,re.MULTILINE)
     timing=re.search(
-        r"^BOARD_EXPERIMENT one_window_staged_latency_us=(\\d+)$",
+        r"^BOARD_EXPERIMENT one_window_staged_latency_us=(\d+)$",
         section,re.MULTILINE)
     memory=re.search(
-        r"^BOARD_EXPERIMENT free_heap_8bit=(\\d+) "
-        r"minimum_free_heap_8bit=(\\d+)$",
+        r"^BOARD_EXPERIMENT free_heap_8bit=(\d+) "
+        r"minimum_free_heap_8bit=(\d+)$",
         section,re.MULTILINE)
     disclaimer=("NO_ENERGY_MEASUREMENT NO_FULL_PEAK_RAM_CERTIFICATION"
                 in section)
