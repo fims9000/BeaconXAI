@@ -49,10 +49,11 @@ def run(args) -> None:
     xt,yt,xv,yv=load_npz_dataset(path)
     with np.load(path) as data:
         a=set(map(int,np.unique(data["subject_train"])))
-        b=set(map(int,np.unique(data["subject_test"])))
+        test_subjects=data["subject_test"].astype(int)
+        b=set(map(int,np.unique(test_subjects)))
     if a&b:
         raise ValueError("subject overlap in input dataset")
-    idx=balanced_subject_sample(np.load(path)["subject_test"],args.max_test,args.seed)
+    idx=balanced_subject_sample(test_subjects,args.max_test,args.seed)
     mu,sigma=fit_channel_standardizer(xt)
     xtrain=apply_standardizer(xt,mu,sigma)
     test=apply_standardizer(xv[idx],mu,sigma)
@@ -117,7 +118,7 @@ def run(args) -> None:
             lambda:[model(sample[None]) for sample in probes],
             args.warmups,args.repeats)
         rows.append({
-            "sample":i,"subject":int(np.load(path)["subject_test"][idx[i]]),
+            "sample":i,"subject":int(test_subjects[idx[i]]),
             "model_predicted_class":source,
             "extra_model_examples":args.budget,
             "distinct_components":len(selected),
