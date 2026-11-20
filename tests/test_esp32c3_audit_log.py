@@ -1,6 +1,6 @@
 import pytest
 
-from scripts.check_esp32c3_audit_log import evaluate_uart_log
+from scripts.check_esp32c3_audit_log import evaluate_uart_log,evaluate_staged_uart_log
 
 
 def valid_log():
@@ -55,3 +55,53 @@ def test_truncated_log_rejected():
 def test_non_board_log_rejected():
     with pytest.raises(ValueError,match="not a BEACON"):
         evaluate_uart_log("ALL PASS 16 DONE")
+
+
+def staged_valid_log(q=32):
+    return f"""BEACON_ADAPTIVE_V2_STAGED_EXPERIMENTAL_ESP32C3
+STAGED callback_ok=1 actual_model_calls={q} expected_calls={q} class=2 expected_class=2
+SELFTEST class=PASS candidate_set=PASS top3_set=PASS budget=PASS gap16=PASS
+BOARD_EXPERIMENT one_window_staged_latency_us=78391
+BOARD_EXPERIMENT free_heap_8bit=202123 minimum_free_heap_8bit=199001
+NO_ENERGY_MEASUREMENT NO_FULL_PEAK_RAM_CERTIFICATION
+DONE
+"""
+
+
+@pytest.mark.parametrize("q",[16,32])
+def test_staged_accepts_only_valid_observed_q16_or_q32_receipt(q):
+    record=evaluate_staged_uart_log(staged_valid_log(q))
+    assert record["selftest_success"]
+    assert record["model_evaluations"]==q
+    assert record["optional_not_default_q16"]
+    assert record["receipt_text_alone_does_not_prove_physical_origin"]
+    assert record["energy_joules"] is None
+    assert record["n_independent_timing_windows"]==1
+
+
+@pytest.mark.parametrize("before,after",[
+    ("callback_ok=1","callback_ok=0"),
+    ("actual_model_calls=32","actual_model_calls=24"),
+    ("expected_calls=32","expected_calls=24"),
+    ("class=2 expected_class=2","class=1 expected_class=2"),
+    ("candidate_set=PASS","candidate_set=FAIL"),
+    ("top3_set=PASS","top3_set=FAIL"),
+    ("budget=PASS","budget=FAIL"),
+    ("gap16=PASS","gap16=FAIL"),
+    ("one_window_staged_latency_us=78391","one_window_staged_latency_us=0"),
+    ("minimum_free_heap_8bit=199001","minimum_free_heap_8bit=299001"),
+    ("NO_ENERGY_MEASUREMENT NO_FULL_PEAK_RAM_CERTIFICATION",""),
+    ("DONE",""),
+])
+def test_staged_rejects_missing_failed_or_inconsistent_receipt(before,after):
+    with pytest.raises(ValueError):
+        evaluate_staged_uart_log(staged_valid_log().replace(before,after))
+
+
+def test_staged_parser_refuses_baseline_or_mixed_boots():
+    with pytest.raises(ValueError):
+        evaluate_staged_uart_log(valid_log())
+    with pytest.raises(ValueError):
+        evaluate_staged_uart_log(staged_valid_log()+staged_valid_log())
+    with pytest.raises(ValueError):
+        evaluate_staged_uart_log(staged_valid_log()+"DONE\n")
