@@ -1,0 +1,86 @@
+name: BEACON signed Q16 robustness across training subject partitions
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uci_har_signed_seed_robustness.yml'
+      - 'scripts/run_cheap_directed_counterevidence.py'
+      - 'scripts/summarize_directed_seed_grid.py'
+      - 'tests/test_directed_seed_grid.py'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  NUMEXPR_NUM_THREADS: '1'
+  PYTHONHASHSEED: '0'
+
+jobs:
+  independent-train-role-seeds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        model: [raw_mlp, extratrees]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install project and tests
+        run: python -m pip install -e . pytest
+      - name: Test correct repeated role splits and fixed test windows
+        run: python -m pytest -q tests/test_directed_seed_grid.py tests/test_directed_evidence.py
+      - name: Prepare official UCI HAR dataset
+        run: |
+          python scripts/preprocess_uci_har_for_q36.py \
+            --root data/uci_har --out data/uci_har_official_subjects.npz
+      - name: Repeat exact Q16 mathematical counterevidence at three training-role seeds
+        run: |
+          for seed in 57 58 59; do
+            python -u scripts/run_cheap_directed_counterevidence.py \
+              --npz-path data/uci_har_official_subjects.npz \
+              --out-dir outputs_composite/math_signed_seeds/${{ matrix.model }}_${seed} \
+              --model ${{ matrix.model }} --seed ${seed} \
+              --windows-per-subject 6 --q 16 --test-sampling-seed 358
+          done
+      - name: Aggregate only paired fixed-window outcomes
+        run: |
+          python scripts/summarize_directed_seed_grid.py \
+            --root outputs_composite/math_signed_seeds \
+            --model ${{ matrix.model }} --seeds 57,58,59 \
+            --out outputs_composite/math_signed_seeds/summary_${{ matrix.model }}.json
+      - name: Preserve provenance
+        if: always()
+        run: |
+          mkdir -p outputs_composite/math_signed_seeds
+          {
+            git rev-parse HEAD
+            python --version
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pytest'
+            if test -f data/uci_har_official_subjects.npz; then
+              sha256sum data/uci_har_official_subjects.npz
+            fi
+          } > outputs_composite/math_signed_seeds/provenance_${{ matrix.model }}.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: BEACON-signed-Q16-seeds-${{ matrix.model }}
+          path: |
+            outputs_composite/math_signed_seeds/${{ matrix.model }}_*/
+            outputs_composite/math_signed_seeds/summary_${{ matrix.model }}.json
+            outputs_composite/math_signed_seeds/provenance_${{ matrix.model }}.txt
+          retention-days: 30
+          if-no-files-found: warn
