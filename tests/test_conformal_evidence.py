@@ -108,8 +108,8 @@ def test_online_certificate_uses_real_probes_not_full_oracle():
                        maximum_windows_per_subject=2)
     result=run_certified_explanation(x,base,comps,predicted,bound,
         np.ones(n),fake_model,max_queries=16,step=4)
-    assert len(result.ranking)==result.extra_model_evaluations==sum(calls)
-    assert all(0<=g<n for g in result.ranking)
+    assert len(result.ranked)==result.extra_model_evaluations==sum(calls)
+    assert all(0<=g<n for g in result.ranked)
     assert result.forward_batches==len(calls)
     # A certificate is claimed only if actual observations beat all
     # unmeasured upper envelopes; otherwise the API explicitly abstains.
