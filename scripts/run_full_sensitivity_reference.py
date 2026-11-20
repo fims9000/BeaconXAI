@@ -60,12 +60,39 @@ def run(args) -> None:
     if args.budget < 3 or args.budget >= M:
         raise ValueError("Need 3 <= Q < M for independent full-budget reference")
     t0 = time.perf_counter()
-    classifier = _train_extratrees_local(train, yt, args.trees, .7, 1)
+    model_type = getattr(args, "model", "extratrees")
+    if model_type == "extratrees":
+        classifier = _train_extratrees_local(train, yt, args.trees, .7, 1)
+        classes = np.asarray(classifier.model.classes_, dtype=int)
+
+        def raw_probabilities(batch):
+            return classifier.model.predict_proba(_anfis_features(np.asarray(batch)))
+        model_description = "ExtraTrees on engineered ANFIS features"
+    elif model_type == "raw_mlp":
+        from sklearn.neural_network import MLPClassifier
+        classifier = MLPClassifier(hidden_layer_sizes=(32,),alpha=.01,
+                                   batch_size=128,max_iter=30,early_stopping=True,
+                                   n_iter_no_change=6,random_state=args.seed)
+        classifier.fit(train.reshape(len(train), -1), yt)
+        classes = np.asarray(classifier.classes_,dtype=int)
+
+        def raw_probabilities(batch):
+            array = np.asarray(batch)
+            return classifier.predict_proba(array.reshape(len(array), -1))
+        model_description = "Raw-window MLPClassifier(hidden=32, alpha=.01, max_iter=30)"
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
     train_time_sec = time.perf_counter() - t0
+    if (classes.ndim != 1 or not len(classes) or np.any(classes < 0)
+        or len(set(classes.tolist())) != len(classes)):
+        raise ValueError("Unexpected classifier class index mapping")
+    n_classes = int(max(classes.max(),np.max(yt))) + 1
     profiles = fit_class_profiles(train, yt)
 
     def predict_many(batch):
-        p = classifier.model.predict_proba(_anfis_features(np.asarray(batch)))
+        raw = raw_probabilities(np.asarray(batch))
+        p = np.full((len(raw), n_classes), 1e-12, dtype=float)
+        p[:,classes] = raw
         return np.log(np.clip(p, 1e-12, 1))
 
     baseline = predict_many(test)
@@ -125,7 +152,9 @@ def run(args) -> None:
         "reference": "full Q=M model margin sensitivity, same neutralization operator",
         "reference_is_causal_ground_truth": False,
         "no_injected_synthetic_patch": True,
-        "model": "ExtraTrees on engineered ANFIS features",
+        "model": model_description,
+        "model_type": model_type,
+        "model_class_indices": classes.tolist(),
         "model_training_seconds": train_time_sec,
         "model_fit_on_training_subjects_only": True,
         "train_subjects": sorted(map(int,np.unique(st))),
@@ -172,6 +201,7 @@ def main():
     p.add_argument("--time-bins",type=int,default=12)
     p.add_argument("--budget",type=int,default=16)
     p.add_argument("--trees",type=int,default=120)
+    p.add_argument("--model",choices=("extratrees","raw_mlp"),default="extratrees")
     p.add_argument("--seed",type=int,default=57)
     run(p.parse_args())
 
