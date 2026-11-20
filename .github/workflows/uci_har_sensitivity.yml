@@ -1,0 +1,74 @@
+name: Independent UCI HAR natural-signal Q8-Q16-Q32 replication
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uci_har_sensitivity.yml'
+      - 'scripts/preprocess_uci_har_for_q36.py'
+      - 'tests/test_preprocess_uci_har.py'
+      - 'scripts/run_full_sensitivity_reference.py'
+      - 'tests/test_full_sensitivity_reference.py'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  uci-har:
+    runs-on: ubuntu-latest
+    timeout-minutes: 110
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - model: extratrees
+            max_test: 180
+          - model: raw_mlp
+            max_test: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install package and test dependencies
+        run: python -m pip install -e . pytest
+      - name: Verify official partition and budget accounting
+        run: |
+          python -m pytest -q tests/test_preprocess_uci_har.py \
+            tests/test_sensitivity_reference.py tests/test_full_sensitivity_reference.py
+      - name: Download UCI HAR and preserve official participant split
+        run: |
+          python scripts/preprocess_uci_har_for_q36.py \
+            --root data/uci_har --out data/uci_har_official_subjects.npz
+      - name: Compare Q8 Q16 Q32 to full Q36 on natural UCI HAR windows
+        run: |
+          python -u scripts/run_full_sensitivity_reference.py \
+            --npz-path data/uci_har_official_subjects.npz \
+            --out-dir outputs_composite/uci_har_qgrid_${{ matrix.model }} \
+            --dataset UCI_HAR --model ${{ matrix.model }} \
+            --max-test ${{ matrix.max_test }} \
+            --time-bins 12 --q-grid 8,16,32 --seed 57
+      - name: Record exact version and dataset checksum
+        if: always()
+        run: |
+          mkdir -p outputs_composite/uci_har_qgrid_${{ matrix.model }}
+          {
+            git rev-parse HEAD
+            python --version
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pandas|pytest'
+            if test -f data/uci_har_official_subjects.npz; then sha256sum data/uci_har_official_subjects.npz; fi
+          } > outputs_composite/uci_har_qgrid_${{ matrix.model }}/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: uci-har-qgrid-${{ matrix.model }}
+          path: outputs_composite/uci_har_qgrid_${{ matrix.model }}/
+          if-no-files-found: warn
+          retention-days: 30
