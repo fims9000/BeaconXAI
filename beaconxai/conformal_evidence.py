@@ -25,7 +25,7 @@ from math import ceil
 from typing import Callable, Sequence
 
 import numpy as np
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import Ridge, LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
 from .sensitivity_reference import moving_margin_effects, rank_effects
@@ -290,3 +290,72 @@ def run_certified_explanation(
 def __neutralize(x,component):
     from .contrastive import neutralize_interp
     return neutralize_interp(x,component)
+
+
+
+@dataclass
+class PairwiseTop3Surrogate:
+    """Linear top3 ranker: no model calls or counterfactuals at inference."""
+    scaler: StandardScaler
+    logistic: LogisticRegression
+    feature_count: int
+    fitting_windows: int
+    training_pairs: int
+    discarded_tied_windows: int
+
+    def score(self, features: np.ndarray) -> np.ndarray:
+        f=np.asarray(features,dtype=float)
+        if f.ndim!=2 or f.shape[1]!=self.feature_count or not np.isfinite(f).all():
+            raise ValueError("invalid pairwise ranker features")
+        values=self.scaler.transform(f) @ self.logistic.coef_[0]
+        if not np.isfinite(values).all():
+            raise ValueError("nonfinite pairwise ranking score")
+        return values
+
+
+def fit_pairwise_top3_surrogate(
+    feature_windows: Sequence[np.ndarray],
+    effect_windows: Sequence[np.ndarray],
+    topk: int = 3, cost: float = .1,
+    minimum_effect_gap: float = 1e-6,
+) -> PairwiseTop3Surrogate:
+    """Minimize sum log(1+exp(-(theta^T(phi_pos-phi_neg))))+L2 penalty.
+
+    Uses only OFFLINE surrogate-fit subjects and their actual full-Q=M
+    perturbation-effect ranks. The classifier is frozen. No causal attribution
+    or calibrated probability is asserted.
+    """
+    if (not feature_windows or len(feature_windows)!=len(effect_windows)
+        or cost<=0 or minimum_effect_gap<0):
+        raise ValueError("invalid ranker fit inputs")
+    F=np.asarray(feature_windows,dtype=float)
+    Y=np.asarray(effect_windows,dtype=float)
+    if (F.ndim!=3 or Y.shape!=F.shape[:2]
+        or not 1<=topk<F.shape[1] or not np.isfinite(F).all()
+        or not np.isfinite(Y).all() or np.any(Y<0)):
+        raise ValueError("invalid ranker feature/effect geometry")
+    scaler=StandardScaler().fit(F.reshape(-1,F.shape[-1]))
+    Z=scaler.transform(F.reshape(-1,F.shape[-1])).reshape(F.shape)
+    differences=[]
+    discard=0
+    for f,e in zip(Z,Y):
+        indices=np.argsort(-e,kind="stable")
+        cutoff=e[indices[topk-1]]-e[indices[topk]]
+        if cutoff<=minimum_effect_gap:
+            discard+=1
+            continue
+        pos=f[indices[:topk]]
+        neg=f[indices[topk:]]
+        differences.append((pos[:,None,:]-neg[None,:,:]).reshape(-1,F.shape[-1]))
+    if not differences:
+        raise ValueError("all surrogate-fit windows have ambiguous top-k effects")
+    positive=np.concatenate(differences)
+    pair_differences=np.concatenate((positive,-positive))
+    labels=np.r_[np.ones(len(positive),dtype=int),
+                 np.zeros(len(positive),dtype=int)]
+    model=LogisticRegression(
+        C=cost,fit_intercept=False,max_iter=250,solver="lbfgs",
+        random_state=57).fit(pair_differences,labels)
+    return PairwiseTop3Surrogate(
+        scaler,model,F.shape[-1],len(F)-discard,len(positive),
+        discard)
