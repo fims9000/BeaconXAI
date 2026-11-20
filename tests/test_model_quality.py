@@ -16,7 +16,7 @@ def test_per_subject_accuracy_and_macro_f1_do_not_micro_weight_subjects():
     assert report[0]["macro_f1"]==1.
     assert report[1]["macro_f1"]==pytest.approx(1/3)
     assert quality["subject_macro_f1"]==pytest.approx(2/3)
-    assert quality["test_windows_micro_macro_f1"]==pytest.approx(11/15)
+    assert quality["pooled_test_window_macro_f1"]==pytest.approx(11/15)
     assert quality["labels_used_in_explanation"] is False
 
 
@@ -25,7 +25,7 @@ def test_missing_true_class_is_penalized_in_f1():
     z=np.array([[10.,0.,0.],[10.,0.,0.],[10.,0.,0.],[10.,0.,0.]])
     quality,_=heldout_model_quality(z,y,np.array([7,7,7,7]))
     assert quality["test_windows_micro_accuracy"]==.25
-    assert quality["test_windows_micro_macro_f1"]<.5
+    assert quality["pooled_test_window_macro_f1"]<.5
 
 
 @pytest.mark.parametrize("scores,labels,subs", [
