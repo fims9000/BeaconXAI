@@ -51,7 +51,9 @@ def test_real_medoid_vs_interp_reference_no_test_label_use(monkeypatch,tmp_path)
     assert m["donor_bank_memory_bytes"]>0
     assert m["no_test_activity_labels_read_for_inference"]
     # Original three single-operator controls + one dual Q8+Q8 audit.
-    assert FakeModel.calls==10*(1+2*36+4*16)
+    # The classifier-quality diagnostic evaluates all 10 clean held-out
+    # windows once, separately from the 10 baseline + Q36 + Q16 probes.
+    assert FakeModel.calls==10 + 10*(1+2*36+4*16)
     with (out/"dual_operator_summary.csv").open() as f:
         dual_summary=list(csv.DictReader(f))
     assert {r["method"] for r in dual_summary}=={
