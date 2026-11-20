@@ -13,7 +13,7 @@ import struct
 
 import numpy as np
 
-from beaconxai.cpp_mlp_export import _tensor_declaration
+from beaconxai.cpp_mlp_export import _tensor_declaration, _c_float
 
 
 def render_class_means_header(
@@ -170,7 +170,7 @@ def save_staged_upgrade_fixture(
         or separation.shape!=(len(x),) or
         not np.isfinite(x).all() or not np.isfinite(gap).all()
         or not np.isfinite(separation).all()
-        or np.any(cls<0) or np.any(q!=16)&np.any(q!=32)
+        or np.any(cls<0) or np.any((q!=16)&(q!=32))
         or len(selected_id_lists)!=len(x) or len(ranked_id_lists)!=len(x)):
         raise ValueError("invalid staged budget parity fixture")
     # Explicit check, not a chained bitwise comparison accidentally
@@ -186,7 +186,7 @@ def save_staged_upgrade_fixture(
             if (len(chosen)!=budget or len(rank)!=budget
                 or len(set(chosen))!=budget or len(set(rank))!=budget
                 or set(chosen)!=set(rank)
-                or any(k<0 or k>=36 for k in chosen+rank)):
+                or any(k<0 or k>=36 for k in list(chosen)+list(rank))):
                 raise ValueError("invalid staged selected/ranked component IDs")
             selected=sorted(chosen)+[65535]*(32-int(budget))
             ordering=list(rank)+[65535]*(32-int(budget))
