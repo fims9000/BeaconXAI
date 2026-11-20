@@ -163,8 +163,11 @@ def run(args) -> None:
     write_csv(out / "summary.csv", summary)
     write_csv(out / "reference_windows.csv", reference_rows)
 
+    dataset_name = getattr(args, "dataset", "PAMAP2")
+    if dataset_name not in ("PAMAP2", "UCI_HAR"):
+        raise ValueError("Unsupported dataset identification")
     manifest = {
-        "dataset": "PAMAP2 (original unmodified test signals)",
+        "dataset": dataset_name + " (original unmodified test signals)",
         "npz_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "reference": "full Q=M model margin sensitivity, same neutralization operator",
         "reference_is_causal_ground_truth": False,
@@ -194,7 +197,7 @@ def run(args) -> None:
             "Interpolating signal components may yield out-of-distribution patterns",
             "Overlapping windows are dependent; per-subject aggregates are descriptive",
             "Q=M reference model calls are charged to OFFLINE measurement, not deployment",
-            "No MCU RAM/latency/energy measurement; the classifier uses engineered features",
+            "No MCU RAM, latency or energy measurement",
         ],
     }
     (out/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf8")
@@ -222,6 +225,7 @@ def main():
     p.add_argument("--q-grid",default="",help="Optional comma-separated Q, e.g. 8,16,32")
     p.add_argument("--trees",type=int,default=120)
     p.add_argument("--model",choices=("extratrees","raw_mlp"),default="extratrees")
+    p.add_argument("--dataset",choices=("PAMAP2","UCI_HAR"),default="PAMAP2")
     p.add_argument("--seed",type=int,default=57)
     run(p.parse_args())
 
