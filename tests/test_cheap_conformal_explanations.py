@@ -50,7 +50,8 @@ def args(path,out):
     return SimpleNamespace(
         npz_path=path,out_dir=out,model="extratrees",seed=57,
         trees=8,windows_per_subject=2,alpha=.2,
-        ridge_alpha=100.,max_queries=16,batch_size=4)
+        ridge_alpha=100.,pairwise_c=.1,
+        max_queries=16,batch_size=4)
 
 
 def test_all_train_roles_independent_of_official_outer_subjects():
