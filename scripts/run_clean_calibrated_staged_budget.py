@@ -28,7 +28,8 @@ from beaconxai.contrastive import fit_class_profiles, make_components, neutraliz
 from beaconxai.datasets import apply_standardizer, fit_channel_standardizer, load_npz_dataset
 from beaconxai.sensitivity_reference import moving_margin_effects, rank_effects, reference_metrics
 from beaconxai.staged_budget import (
-    StagedPolicy,fit_staged_policy,fit_constrained_upgrade,run_staged_audit,
+    StagedPolicy,fit_staged_policy,fit_constrained_upgrade,
+    run_staged_audit,exact_cost_matched_random_upgrade,
 )
 from beaconxai.subject_sampling import balanced_subject_sample
 from scripts.run_component_conflict_benchmark import _anfis_features,_train_extratrees_local
@@ -321,12 +322,16 @@ def run(args):
     )+36*len(test):
         raise AssertionError("global actual query accounting differs from manifest")
     summary,per_subject=summarize_subject_macro(rows,args.penalty)
+    random_exact_match=exact_cost_matched_random_upgrade(
+        rows,seed=args.seed+311,permutations=1000)
     out=Path(args.out_dir)
     out.mkdir(parents=True,exist_ok=True)
     write_csv(out/"per_sample.csv",rows)
     write_csv(out/"per_subject.csv",per_subject)
     write_csv(out/"summary.csv",summary)
     write_csv(out/"inner_calibration_windows.csv",calib_rows)
+    (out/"random_exact_cost_match.json").write_text(
+        json.dumps(random_exact_match,indent=2),encoding="utf8")
     (out/"inner_calibration.json").write_text(
         json.dumps({
             "policy":policy.__dict__,"fit":selection,
@@ -367,6 +372,7 @@ def run(args):
         "random_budget_queries_actual":sum(
             r["extra_model_evaluations"] for r in rows
             if r["method"]=="random_at_matched_budget"),
+        "random_exact_cost_matched_offline_reference":random_exact_match,
         "full_Q36_offline_queries":len(test)*36,
         "fixed_Q8_Q16_Q32_offline_control_queries":len(test)*(8+16+32),
         "outer_cached_baseline_queries":len(test),
@@ -382,6 +388,14 @@ def run(args):
     }
     (out/"manifest.json").write_text(json.dumps(m,indent=2),encoding="utf8")
     print("POLICY_FIT",json.dumps(selection,sort_keys=True),flush=True)
+    print("EXACT_COST_RANDOM_COMPARE",json.dumps({
+        "selected_online_q":random_exact_match["actual_online_policy_subject_macro_mean_q"],
+        "selected_top3":random_exact_match["observed_subject_macro_overlap"],
+        "random_equal_q_top3":random_exact_match["random_matched_overlap_mean"],
+        "selected_minus_random":random_exact_match["observed_minus_random_matched_mean"],
+        "permutations":random_exact_match["n_random_permutations"],
+        "not_population_significance":True,
+    },sort_keys=True),flush=True)
     for r in summary:
         print(f"BUDGET_RESULT model={args.model} method={r['method']} "
               f"top3={r['subject_macro_top3_overlap']:.6f} "
