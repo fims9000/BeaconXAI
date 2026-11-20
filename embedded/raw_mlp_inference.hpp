@@ -14,6 +14,31 @@
 
 namespace beacon_raw_mlp {
 
+// Same training-only channel normalization as Python apply_standardizer:
+// (raw[t,c] - train_mean[c]) / (train_sigma[c]).
+// Works in-place, uses no heap. Call before predict_top2_log_margin.
+template <size_t TimeSteps, size_t Channels>
+inline bool standardize_channels(
+    const float* raw, const float* training_mu, const float* training_sigma,
+    float* standardized) {
+  if (!raw || !training_mu || !training_sigma || !standardized
+      || TimeSteps<1 || Channels<1) return false;
+  for (size_t c=0; c<Channels; ++c) {
+    if (!std::isfinite(training_mu[c]) ||
+        !std::isfinite(training_sigma[c]) ||
+        training_sigma[c] <= 0.0f) return false;
+  }
+  for (size_t t=0; t<TimeSteps; ++t)
+    for (size_t c=0; c<Channels; ++c) {
+      const size_t index=t*Channels+c;
+      if (!std::isfinite(raw[index])) return false;
+      standardized[index] =
+          (raw[index]-training_mu[c])/training_sigma[c];
+      if (!std::isfinite(standardized[index])) return false;
+    }
+  return true;
+}
+
 template <size_t InputDim, size_t HiddenDim, size_t OutputDim>
 inline bool predict_top2_log_margin(
     const float* standardized_input, size_t length,
