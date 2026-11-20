@@ -194,16 +194,36 @@ def run(args):
                 np.asarray(source_classes),np.asarray(real_q),
                 np.asarray(real_gap),np.asarray(real_sep),
                 real_selected,real_ranks)
+            # A Q32 branch must actually be exercised by the eventual
+            # board self-test whenever the trained policy upgrades ANY
+            # held-out window. Otherwise a single default Q16 sample would
+            # leave the optional firmware's extension branch untested.
+            frozen_case=next((k for k,qv in enumerate(real_q) if qv==32),0)
             (out/"beacon_board_staged_reference.hpp").write_text(
                 render_board_staged_reference_header(
-                    real_q[0],real_selected[0],real_ranks[0],real_gap[0]),
+                    real_q[frozen_case],real_selected[frozen_case],
+                    real_ranks[frozen_case],real_gap[frozen_case]),
+                encoding="utf8")
+            # Default fixed Q16 and optional Q32 variants must use the same
+            # frozen raw input but their own independently expected ranks.
+            (out/"beacon_board_reference.hpp").write_text(
+                render_board_reference_window_header(
+                    xv[idx[frozen_case]],source_classes[frozen_case],
+                    np.asarray(selected_sets[frozen_case]),
+                    np.asarray(reference_ranks[frozen_case])),
                 encoding="utf8")
             staged_info={
                 "rule":trained_rule.__dict__,
                 "trained_gap_threshold":threshold,
                 "n_parity_windows":len(real_q),
                 "n_upgraded_to_q32":sum(int(q==32) for q in real_q),
-                "frozen_board_selfcheck_expected_q":int(real_q[0]),
+                "frozen_board_selfcheck_expected_q":
+                    int(real_q[frozen_case]),
+                "frozen_board_selfcheck_window_in_export":
+                    int(frozen_case),
+                "frozen_board_q32_case_selected_if_any":bool(
+                    any(q==32 for q in real_q)),
+                "frozen_board_raw_test_label_not_used":True,
                 "total_actual_sequential_model_examples":int(sum(real_q)),
                 "python_min_observed_gap":float(min(real_gap)),
                 "python_max_observed_gap":float(max(real_gap)),
