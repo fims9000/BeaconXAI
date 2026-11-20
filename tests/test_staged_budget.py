@@ -5,7 +5,7 @@ import pytest
 from beaconxai.contrastive import make_components
 from beaconxai.staged_budget import (
     StagedPolicy, measured_top3_gap, choose_budget,run_staged_audit,
-    fit_staged_policy,evaluate_policy_offline,
+    fit_staged_policy,fit_constrained_upgrade,evaluate_policy_offline,
 )
 
 
@@ -144,3 +144,57 @@ def test_calibration_requires_multiple_subjects_and_finite_reference():
     rows[0]["overlap32"]=np.nan
     with pytest.raises(ValueError,match="nonfinite"):
         fit_staged_policy(rows)
+
+
+def test_conservative_upgrade_stops_after_16_or_32_real_calls():
+    x,comps,prior,baseline=_toy()
+    calls=[]
+    def model(batch):
+        calls.append(len(batch))
+        effects=np.sum(np.square(batch),axis=(1,2))
+        return np.column_stack((2.-effects/200,np.zeros(len(batch))))
+    for threshold,expected,batches in (
+        (0.,16,[8,8]),(1.01,32,[8,8,16])):
+        calls.clear()
+        policy=StagedPolicy("upgrade16",threshold_q16=threshold)
+        result=run_staged_audit(x,comps,prior,baseline,model,policy)
+        assert result.queries==expected
+        assert calls==batches
+    assert choose_budget(StagedPolicy("upgrade16",threshold_q16=.2),.9,.1)==32
+    assert choose_budget(StagedPolicy("upgrade16",threshold_q16=.2),.0,.3)==16
+
+
+def test_train_only_upgrade_beats_equal_query_rate_random_when_informative():
+    rows=[]
+    for subject in (1,2,3):
+        for i in range(4):
+            hard=i==0
+            rows.append(dict(
+                subject=subject,gap8=.1,gap16=.01 if hard else .5,
+                overlap8=0.,overlap16=1/3 if hard else 1.,
+                overlap32=1.))
+    rule,report=fit_constrained_upgrade(
+        rows,max_mean_q=20,min_gain=.01,min_excess_over_random=.01)
+    assert rule.mode=="upgrade16"
+    assert report["adaptive_upgrade_promoted"]
+    assert report["winning_threshold"]["macro_q"]==20.
+    assert report["winning_threshold"]["macro_excess_vs_random"]>0.
+    assert choose_budget(rule,.1,.01)==32
+    assert choose_budget(rule,.1,.5)==16
+    assert report["no_outer_test_reference_or_labels_used_for_selection"]
+
+
+def test_train_only_upgrade_falls_back_when_uncertainty_not_predictive():
+    rows=_calibration()
+    for r in rows:
+        r["overlap16"]=.75
+        r["overlap32"]=.75
+    policy,report=fit_constrained_upgrade(rows,max_mean_q=20.)
+    assert policy.mode=="fixed16"
+    assert not report["adaptive_upgrade_promoted"]
+    assert report["random_upgrade_probability_calibrated"]==0.
+
+
+def test_conservative_upgrade_invalid_budget_rejected():
+    with pytest.raises(ValueError):
+        fit_constrained_upgrade(_calibration(),max_mean_q=15)
