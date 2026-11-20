@@ -81,11 +81,15 @@ def render_raw_mlp_header(
 
 def save_parity_fixture(
     path: str | Path,
-    standardized_windows: np.ndarray,
+    raw_windows: np.ndarray,
     expected_top2_log_margins: np.ndarray
 ) -> None:
-    """Little-endian binary (uint32 N,D, N*[D float32 + margin float32])."""
-    x=np.asarray(standardized_windows,dtype=np.float32)
+    """Little-endian binary raw sensor samples and reference logit margins.
+
+    The C++ parity harness independently normalizes raw values using the
+    training-only mu/sigma exported beside MLP weights.
+    """
+    x=np.asarray(raw_windows,dtype=np.float32)
     margins=np.asarray(expected_top2_log_margins,dtype=np.float32)
     if (x.ndim!=3 or margins.shape!=(len(x),) or not len(x)
         or not np.isfinite(x).all() or not np.isfinite(margins).all()):
