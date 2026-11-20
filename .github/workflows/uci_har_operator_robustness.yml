@@ -8,6 +8,10 @@ on:
       - '.github/workflows/uci_har_operator_robustness.yml'
       - 'scripts/run_operator_robustness.py'
       - 'tests/test_operator_robustness.py'
+      - 'beaconxai/dual_operator_audit.py'
+      - 'beaconxai/dual_operator_metrics.py'
+      - 'tests/test_dual_operator_audit.py'
+      - 'tests/test_dual_operator_metrics.py'
   workflow_dispatch:
 
 concurrency:
@@ -40,6 +44,7 @@ jobs:
       - name: Verify train medoid, oracle isolation and call accounting
         run: |
           python -m pytest -q tests/test_operator_robustness.py \
+            tests/test_dual_operator_audit.py tests/test_dual_operator_metrics.py \
             tests/test_real_donor.py tests/test_preprocess_uci_har.py
       - name: Prepare official UCI HAR subjects
         run: |
