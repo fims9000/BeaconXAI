@@ -1,0 +1,71 @@
+name: UCI HAR train-calibrated BEACON Q8-Q16-Q32 actual-query frontier
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uci_har_staged_budget.yml'
+      - 'beaconxai/staged_budget.py'
+      - 'scripts/run_clean_calibrated_staged_budget.py'
+      - 'tests/test_staged_budget.py'
+      - 'tests/test_clean_calibrated_staged_budget.py'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  inner-calibration-outer-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        model: [extratrees, raw_mlp]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install BEACON and test dependencies
+        run: python -m pip install -e . pytest
+      - name: Verify query counts, nested subjects and label-invariant explanation
+        run: |
+          python -m pytest -q tests/test_staged_budget.py \
+            tests/test_clean_calibrated_staged_budget.py
+      - name: Prepare official 21/9 participant UCI HAR split
+        run: |
+          python scripts/preprocess_uci_har_for_q36.py \
+            --root data/uci_har --out data/uci_har_official_subjects.npz
+      - name: Fit threshold on inner training subjects and test actual stages
+        run: |
+          python -u scripts/run_clean_calibrated_staged_budget.py \
+            --npz-path data/uci_har_official_subjects.npz \
+            --out-dir outputs_composite/staged_uci_har_${{ matrix.model }} \
+            --model ${{ matrix.model }} --seed 57 \
+            --max-calib 72 --max-test 90 --penalty 0.75
+      - name: Record exact provenance
+        if: always()
+        run: |
+          mkdir -p outputs_composite/staged_uci_har_${{ matrix.model }}
+          {
+            git rev-parse HEAD
+            python --version
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pytest'
+            if test -f data/uci_har_official_subjects.npz; then
+              sha256sum data/uci_har_official_subjects.npz
+            fi
+          } > outputs_composite/staged_uci_har_${{ matrix.model }}/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: staged-budget-uci-har-${{ matrix.model }}
+          path: outputs_composite/staged_uci_har_${{ matrix.model }}/
+          retention-days: 30
+          if-no-files-found: warn
