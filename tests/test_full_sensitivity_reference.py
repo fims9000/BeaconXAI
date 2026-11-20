@@ -55,3 +55,28 @@ def test_subject_overlap_is_rejected(tmp_path):
                          max_test=10,seed=57,trees=12,time_bins=12,budget=16)
     with pytest.raises(ValueError,match="leakage"):
         study.run(args)
+
+
+def test_raw_mlp_reference_toy_without_test_label_leakage(tmp_path):
+    path=fake_npz(tmp_path)
+    args=SimpleNamespace(npz_path=path,out_dir=tmp_path/"raw_result",
+                         max_test=6,seed=57,trees=12,time_bins=12,budget=16,
+                         model="raw_mlp")
+    study.run(args)
+    manifest=json.loads((args.out_dir/"manifest.json").read_text())
+    assert manifest["model_type"]=="raw_mlp"
+    assert manifest["no_test_labels_or_reference_ranks_passed_to_methods"]
+    assert manifest["n_windows"]==6
+    with (args.out_dir/"summary.csv").open() as f:
+        rows=list(csv.DictReader(f))
+    assert len(rows)==len(study.METHODS)
+    assert all(0<=float(r['subject_macro_top3_overlap'])<=1 for r in rows)
+
+
+def test_invalid_model_type_fails_before_evaluation(tmp_path):
+    path=fake_npz(tmp_path)
+    args=SimpleNamespace(npz_path=path,out_dir=tmp_path/"invalid_result",
+                         max_test=6,seed=57,trees=12,time_bins=12,budget=16,
+                         model="made_up")
+    with pytest.raises(ValueError,match="Unknown model type"):
+        study.run(args)
