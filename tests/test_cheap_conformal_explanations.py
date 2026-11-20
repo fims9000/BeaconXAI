@@ -66,17 +66,19 @@ def test_complete_nested_protocol_and_test_label_invariance(tmp_path,monkeypatch
     path=data_fixture(tmp_path/"data.npz")
     config=args(path,tmp_path/"result1")
     manifest,summary=r.run(config)
-    assert len(summary)==7
+    assert len(summary)==9
     assert manifest["subject_roles_mutually_disjoint"]
     assert manifest["n_test_windows"]==18
     assert manifest["subject_block_conformal"]["order_statistic_rank"]==8
     assert manifest["same_windows_per_subject_in_calibration_and_test"]==2
     assert manifest["n_sensitivities_fit_offline"]==8*36
+    assert manifest["pairwise_top3_fit_windows"]+(
+        manifest["pairwise_top3_skipped_ambiguous_windows"])==8
     assert manifest["n_sensitivities_calibrate_offline"]==18*36
     assert manifest["online_certificate"]["certified_windows"]+(
         manifest["online_certificate"]["abstained_windows"])==18
     rows=list(csv.DictReader((config.out_dir/"per_sample.csv").open()))
-    assert len(rows)==18*7
+    assert len(rows)==18*9
     assert all(int(v["extra_model_evaluations"]) in (0,4,8,12,16)
                for v in rows)
     assert all(v["output_status"]!="certified" or v["method"]=="certify_or_abstain_q16"
