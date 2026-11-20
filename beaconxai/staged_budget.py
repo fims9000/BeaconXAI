@@ -27,7 +27,7 @@ class StagedPolicy:
     threshold_q16: float = 1.01
 
     def __post_init__(self):
-        if self.mode not in ("fixed8", "fixed16", "fixed32", "adaptive"):
+        if self.mode not in ("fixed8", "fixed16", "fixed32", "adaptive", "upgrade16"):
             raise ValueError("unknown staged budget policy")
         if (not np.isfinite(self.threshold_q8)
             or not np.isfinite(self.threshold_q16)
@@ -59,6 +59,8 @@ def choose_budget(policy: StagedPolicy, gap8: float, gap16: float) -> int:
         raise ValueError("invalid observed gap feature")
     if policy.mode.startswith("fixed"):
         return int(policy.mode[5:])
+    if policy.mode == "upgrade16":
+        return 32 if gap16 < policy.threshold_q16 else 16
     if gap8 >= policy.threshold_q8:
         return 8
     if gap16 >= policy.threshold_q16:
@@ -103,6 +105,8 @@ def run_staged_audit(
             or policy.mode == "adaptive" and
                 (q == 8 and features[8] >= policy.threshold_q8
                  or q == 16 and features[16] >= policy.threshold_q16)
+            or policy.mode == "upgrade16" and q == 16
+                and features[16] >= policy.threshold_q16
             or q == 32):
             break
     return StagedResult(
@@ -199,4 +203,78 @@ def fit_staged_policy(rows: Sequence[dict], penalty: float = 0.75,
         "selected_macro_utility":chosen["macro_utility"],
         "full_Q36_used_only_for_inner_calibration":True,
         "no_outer_test_labels_or_reference_used_to_fit":True,
+    }
+
+
+def fit_constrained_upgrade(
+    rows: Sequence[dict], max_mean_q: float = 20.,
+    min_gain: float = 0.01, min_excess_over_random: float = 0.01,
+) -> tuple[StagedPolicy, dict]:
+    """Train-only conservative Q16->Q32 upshift, never stop before Q16.
+
+    Rank by calibration improvement OVER a random Q32 upgrade at the
+    same mean query rate. Abstain from the upgrade when train evidence
+    is insufficient. The budget constraint and minimum gain are frozen
+    before the held-out outer split is evaluated.
+    """
+    _validate_calibration_rows(rows)
+    if (not np.isfinite(max_mean_q) or not 16 <= max_mean_q <= 32
+        or min_gain < 0 or min_excess_over_random < 0
+        or not all(np.isfinite(x) for x in (min_gain,min_excess_over_random))):
+        raise ValueError("invalid conservative upgrade budget or gain threshold")
+    baseline=evaluate_policy_offline(rows,StagedPolicy("fixed16"),penalty=0)
+    full=evaluate_policy_offline(rows,StagedPolicy("fixed32"),penalty=0)
+    gaps=np.array([float(r["gap16"]) for r in rows],dtype=float)
+    # Quantiles fixed before observing outer subjects. Values above 0
+    # treat the many exact-zero effect gaps as a single tie group.
+    candidates=sorted(set([0.0]+[
+        float(np.nextafter(t,np.inf)) for t in
+        np.quantile(gaps, (.05,.10,.15,.20,.25,.30,.35,.40,.50))
+    ]))
+    choices=[]
+    for threshold in candidates:
+        policy=StagedPolicy("upgrade16",threshold_q16=threshold)
+        report=evaluate_policy_offline(rows,policy,penalty=0)
+        if report["macro_q"]>max_mean_q+1e-9:
+            continue
+        probability=max(0.0,(report["macro_q"]-16.)/16.)
+        expected_random=baseline["macro_overlap"]+probability*(
+            full["macro_overlap"]-baseline["macro_overlap"])
+        choices.append({
+            "threshold":threshold,
+            "macro_q":report["macro_q"],
+            "upgrade_probability_calibration":probability,
+            "macro_overlap":report["macro_overlap"],
+            "macro_gain_vs_fixed16":report["macro_overlap"]-baseline["macro_overlap"],
+            "macro_excess_vs_random":report["macro_overlap"]-expected_random,
+        })
+    if not choices:
+        raise AssertionError("Q16 baseline should always be feasible")
+    winner=max(choices,key=lambda r:(
+        round(r["macro_excess_vs_random"],10),
+        round(r["macro_gain_vs_fixed16"],10),
+        -r["macro_q"]))
+    promoted=(winner["macro_gain_vs_fixed16"]>=min_gain and
+              winner["macro_excess_vs_random"]>=min_excess_over_random and
+              winner["macro_q"]>16.+1e-9)
+    selected=(StagedPolicy("upgrade16",threshold_q16=winner["threshold"])
+              if promoted else StagedPolicy("fixed16"))
+    return selected, {
+        "mode":"train_only_budget_capped_q16_to_q32",
+        "calibration_subjects":sorted({int(r["subject"]) for r in rows}),
+        "calibration_windows":len(rows),
+        "required_minimum_q":16,
+        "maximum_calibration_subject_macro_mean_q":max_mean_q,
+        "minimum_gain_over_q16":min_gain,
+        "minimum_gain_over_random_at_matched_query_rate":min_excess_over_random,
+        "q16_calibration_overlap":baseline["macro_overlap"],
+        "q32_calibration_overlap":full["macro_overlap"],
+        "winning_threshold":winner,
+        "adaptive_upgrade_promoted":promoted,
+        "selected_policy":selected.mode,
+        "random_upgrade_probability_calibrated":(
+            winner["upgrade_probability_calibration"] if promoted else 0.),
+        "no_outer_test_reference_or_labels_used_for_selection":True,
+        "nested_queries_are_actual_if_applied":True,
+        "no_independent_quality_or_causal_guarantee":True,
     }
