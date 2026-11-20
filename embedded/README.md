@@ -123,3 +123,42 @@ quantization (none is performed), physical RAM/Flash allocation, execution
 time/energy on ESP32-C3, or causal validity of the audit. The dual-operator
 abstention method is an **unpromoted negative research control**, not the
 recommended default explanation.
+
+
+## Baseline `adaptive_v2` for ESP32-C3 (cross-compiled, not hardware-tested)
+
+The **original** research baseline now has a separate C++ port:
+`embedded/adaptive_v2_audit.hpp`. It computes all four train-class cheap
+statistics, selects Q=16, then evaluates each interpolation candidate with a
+**real trained raw-input FP32 MLP** via callback. It does not include the
+unsuccessful 8+8 dual-operator method as the default.
+
+`embedded/adaptive_v2_firmware/` is an isolated PlatformIO project for
+`esp32-c3-devkitm-1`. To reproduce its build:
+
+```bash
+python scripts/preprocess_uci_har_for_q36.py \
+  --root data/uci_har --out data/uci_har_official_subjects.npz
+python scripts/export_raw_mlp_cpp.py \
+  --npz-path data/uci_har_official_subjects.npz \
+  --out-dir outputs_composite/esp32c3_model \
+  --adaptive-parity --parity-samples 96 --seed 57
+mkdir -p embedded/adaptive_v2_firmware/include
+cp embedded/adaptive_v2_audit.hpp embedded/raw_mlp_inference.hpp \
+  outputs_composite/esp32c3_model/beacon_mlp_model.hpp \
+  outputs_composite/esp32c3_model/beacon_adaptive_profiles.hpp \
+  outputs_composite/esp32c3_model/beacon_board_reference.hpp \
+  embedded/adaptive_v2_firmware/include/
+pio run -d embedded/adaptive_v2_firmware -e esp32c3
+```
+
+Generated training arrays and full binary build receipts are stored as
+GitHub Actions artifacts, not checked in. On **future** hardware execution
+the UART self-test reports predicted class, candidate-set agreement and
+top-3-set agreement against one frozen subject-held-out window, plus
+a single-window timer and low-water free-heap indicator. No such board log
+has yet been collected.
+
+Build-time RAM/Flash size estimates do **not** prove successful device
+execution, energy consumption, peak runtime memory or causal explanation
+validity. A firmware binary is not intended for blind deployment.
