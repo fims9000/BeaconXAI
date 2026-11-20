@@ -28,6 +28,7 @@ from beaconxai.cpp_adaptive_v2_export import (
     render_class_means_header, save_baseline_q16_fixture,
     render_board_reference_window_header,
     render_staged_upgrade_policy_header,save_staged_upgrade_fixture,
+    render_board_staged_reference_header,
 )
 from beaconxai.contrastive import fit_class_profiles, make_components, neutralize_interp
 from scripts.run_q16_matched_ablation import class_cheap, best_q
@@ -193,11 +194,16 @@ def run(args):
                 np.asarray(source_classes),np.asarray(real_q),
                 np.asarray(real_gap),np.asarray(real_sep),
                 real_selected,real_ranks)
+            (out/"beacon_board_staged_reference.hpp").write_text(
+                render_board_staged_reference_header(
+                    real_q[0],real_selected[0],real_ranks[0],real_gap[0]),
+                encoding="utf8")
             staged_info={
                 "rule":trained_rule.__dict__,
                 "trained_gap_threshold":threshold,
                 "n_parity_windows":len(real_q),
                 "n_upgraded_to_q32":sum(int(q==32) for q in real_q),
+                "frozen_board_selfcheck_expected_q":int(real_q[0]),
                 "total_actual_sequential_model_examples":int(sum(real_q)),
                 "python_min_observed_gap":float(min(real_gap)),
                 "python_max_observed_gap":float(max(real_gap)),
