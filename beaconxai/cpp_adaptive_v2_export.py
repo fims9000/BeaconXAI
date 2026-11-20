@@ -128,3 +128,69 @@ def render_board_reference_window_header(
         "#endif // BEACON_EXPORTED_BOARD_REFERENCE_HPP",
     ]
     return "\n".join(lines)+"\n"
+
+
+def render_staged_upgrade_policy_header(train_threshold: float) -> str:
+    """Compile-time threshold fitted exclusively on inner training subjects."""
+    if not np.isfinite(train_threshold) or train_threshold<0:
+        raise ValueError("invalid trained Q16 relative gap threshold")
+    return (
+        "#ifndef BEACON_EXPORTED_STAGED_POLICY_HPP\n"
+        "#define BEACON_EXPORTED_STAGED_POLICY_HPP\n"
+        "// Training-only fixed cutoff, not causal confidence calibration.\n"
+        "namespace beacon_exported_staged {\n"
+        "constexpr float kQ16GapThreshold = "+_c_float(train_threshold)+";\n"
+        "}\n"
+        "#endif\n"
+    )
+
+
+def save_staged_upgrade_fixture(
+    path: str | Path, raw_windows: np.ndarray,
+    predicted_classes: np.ndarray, budgets: np.ndarray,
+    q16_observed_gaps: np.ndarray,
+    min_final_effect_separations: np.ndarray,
+    selected_id_lists: list[list[int]],
+    ranked_id_lists: list[list[int]],
+) -> None:
+    """Little endian uint32 N,D,M,Qmax then N records:
+
+    float32[D] RAW sample; uint32 predicted source; uint32 true online Q;
+    float64 observed gap16; float64 min measured pairwise-effect separation;
+    uint16[32] selected IDs (ascending, unused=65535);
+    uint16[32] ranked IDs (unused=65535).
+    """
+    x=np.asarray(raw_windows,dtype=np.float32)
+    cls=np.asarray(predicted_classes,dtype=int)
+    q=np.asarray(budgets,dtype=int)
+    gap=np.asarray(q16_observed_gaps,dtype=float)
+    separation=np.asarray(min_final_effect_separations,dtype=float)
+    if (x.ndim!=3 or not len(x) or cls.shape!=(len(x),)
+        or q.shape!=(len(x),) or gap.shape!=(len(x),)
+        or separation.shape!=(len(x),) or
+        not np.isfinite(x).all() or not np.isfinite(gap).all()
+        or not np.isfinite(separation).all()
+        or np.any(cls<0) or np.any(q!=16)&np.any(q!=32)
+        or len(selected_id_lists)!=len(x) or len(ranked_id_lists)!=len(x)):
+        raise ValueError("invalid staged budget parity fixture")
+    # Explicit check, not a chained bitwise comparison accidentally
+    if any(int(z) not in (16,32) for z in q):
+        raise ValueError("Q must be 16 or 32")
+    n,d=len(x),int(np.prod(x.shape[1:]))
+    file=Path(path)
+    file.parent.mkdir(parents=True,exist_ok=True)
+    with file.open("wb") as fp:
+        fp.write(struct.pack("<4I",n,d,36,32))
+        for raw,source,budget,g,sep,chosen,rank in zip(
+            x.reshape(n,d),cls,q,gap,separation,selected_id_lists,ranked_id_lists):
+            if (len(chosen)!=budget or len(rank)!=budget
+                or len(set(chosen))!=budget or len(set(rank))!=budget
+                or set(chosen)!=set(rank)
+                or any(k<0 or k>=36 for k in chosen+rank)):
+                raise ValueError("invalid staged selected/ranked component IDs")
+            selected=sorted(chosen)+[65535]*(32-int(budget))
+            ordering=list(rank)+[65535]*(32-int(budget))
+            fp.write(raw.astype("<f4",copy=False).tobytes())
+            fp.write(struct.pack("<IIdd",int(source),int(budget),float(g),float(sep)))
+            fp.write(np.asarray(selected,dtype="<u2").tobytes())
+            fp.write(np.asarray(ordering,dtype="<u2").tobytes())
