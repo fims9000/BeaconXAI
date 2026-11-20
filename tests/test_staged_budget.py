@@ -6,6 +6,7 @@ from beaconxai.contrastive import make_components
 from beaconxai.staged_budget import (
     StagedPolicy, measured_top3_gap, choose_budget,run_staged_audit,
     fit_staged_policy,fit_constrained_upgrade,evaluate_policy_offline,
+    exact_cost_matched_random_upgrade,
 )
 
 
@@ -198,3 +199,48 @@ def test_train_only_upgrade_falls_back_when_uncertainty_not_predictive():
 def test_conservative_upgrade_invalid_budget_rejected():
     with pytest.raises(ValueError):
         fit_constrained_upgrade(_calibration(),max_mean_q=15)
+
+
+def _random_matching_fixture():
+    rows=[]
+    for subject in (2,9):
+        for i in range(4):
+            base=.0
+            improved=1. if subject==2 and i==0 else 0.
+            upgraded=subject==2 and i==0
+            for method,q,value in (
+                ("fixed_q16",16,base),
+                ("fixed_q32",32,improved),
+                ("constrained_upgrade16",32 if upgraded else 16,
+                 improved if upgraded else base)):
+                rows.append(dict(method=method,subject=subject,
+                                 sample=i,extra_model_evaluations=q,
+                                 top3_overlap=value))
+    return rows
+
+
+def test_random_control_matches_subject_query_budget_exactly():
+    report=exact_cost_matched_random_upgrade(
+        _random_matching_fixture(),seed=57,permutations=3000)
+    assert report["n_subjects"]==2 and report["n_windows"]==8
+    assert report["actual_online_policy_subject_macro_mean_q"]==18.
+    assert report["random_control_macro_mean_q_matched_exactly"]==18.
+    assert report["observed_subject_macro_overlap"]==.125
+    assert report["random_matched_overlap_mean"]<.08
+    assert report["observed_minus_random_matched_mean"]>0.
+    assert report["not_population_significance"]
+    assert report["random_comparator_uses_already_measured_offline_fixed_control_effects"]
+    assert sum(r["upgraded_windows"] for r in report["per_subject"])==1
+
+
+def test_random_control_rejects_missing_and_incorrect_measured_outcomes():
+    a=_random_matching_fixture()
+    with pytest.raises(ValueError,match="missing matched"):
+        exact_cost_matched_random_upgrade(a[:-1])
+    b=_random_matching_fixture()
+    for r in b:
+        if r["method"]=="constrained_upgrade16" and r["subject"]==2:
+            r["top3_overlap"] = .5
+            break
+    with pytest.raises(ValueError,match="disagrees"):
+        exact_cost_matched_random_upgrade(b)
