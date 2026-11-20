@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import pickle
 import sys
 import time
 from pathlib import Path
@@ -65,7 +66,14 @@ def fit_predictor(train_raw: np.ndarray, train_y: np.ndarray,
         or not set(np.unique(train_y)).issubset(set(labels))):
         raise ValueError("invalid class mapping")
     n_classes=int(max(labels.max(),np.max(train_y)))+1
-    counted={"examples":0,"batches":0}
+    counted={
+        "examples":0,"batches":0,
+        "fitted_model_sha256":hashlib.sha256(
+            pickle.dumps(clf,protocol=4)).hexdigest(),
+        "training_standardizer_sha256":hashlib.sha256(
+            np.ascontiguousarray(mu).tobytes()+
+            np.ascontiguousarray(sigma).tobytes()).hexdigest(),
+    }
     def model(xs):
         z=np.asarray(xs)
         if z.ndim!=3 or z.shape[1:]!=train.shape[1:]:
@@ -145,6 +153,9 @@ def calibrate_inner(
         "inner_reference_calls_offline":len(test)*len(components),
         "inner_Q32_observation_calls_for_calibration":len(test)*32,
         "inner_model_calls_total_including_baseline":calls["examples"],
+        "inner_fitted_model_sha256":calls["fitted_model_sha256"],
+        "inner_training_standardizer_sha256":
+            calls["training_standardizer_sha256"],
         "reference_proxy_is_not_causal_truth":True,
     })
     assert calls["examples"]==len(test)*(1+32+len(components))
@@ -329,6 +340,9 @@ def run(args):
         "random_budget_expected_not_forced_equal_per_outer_sample":True,
         "calibration_penalty_per_32_queries":args.penalty,
         "outer_model_training_seconds":outer_model_fit_seconds,
+        "outer_fitted_model_sha256":counts["fitted_model_sha256"],
+        "outer_training_standardizer_sha256":
+            counts["training_standardizer_sha256"],
         "deployed_staged_queries_actual":explicit_query_total,
         "constrained_upgrade_queries_actual":sum(
             r["extra_model_evaluations"] for r in rows
