@@ -57,7 +57,7 @@ def heldout_model_quality(
         "n_test_subjects":len(report),
         "n_test_windows":len(y),
         "test_windows_micro_accuracy":float(np.mean(y==predicted)),
-        "test_windows_micro_macro_f1":_macro_f1(y,predicted),
+        "pooled_test_window_macro_f1":_macro_f1(y,predicted),
         "subject_macro_accuracy":float(np.mean([x["accuracy"] for x in report])),
         "subject_macro_f1":float(np.mean([x["macro_f1"] for x in report])),
         "labels_used_in_explanation":False,
