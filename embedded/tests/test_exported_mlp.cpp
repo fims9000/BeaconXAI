@@ -38,12 +38,18 @@ int main(int argc,char** argv) {
   uint32_t n=0,d=0;
   if(!read_exact(f,&n,sizeof(n)) || !read_exact(f,&d,sizeof(d))
       || n==0 || d!=weights::kInputDim) return 4;
+  std::vector<float> raw(d);
   std::vector<float> input(d);
   double max_absolute_error=0.0;
   for(uint32_t i=0;i<n;++i) {
     float expected=0.0f,actual=0.0f;
-    if(!read_exact(f,input.data(),sizeof(float)*d)
+    if(!read_exact(f,raw.data(),sizeof(float)*d)
         || !read_exact(f,&expected,sizeof(expected))) return 5;
+    // This now checks the entire preprocessing + MLP path, not just a
+    // forward pass on Python-standardized inputs.
+    if(!beacon_raw_mlp::standardize_channels<
+        weights::kTimeSteps,weights::kChannels>(
+        raw.data(),weights::kMu,weights::kSigma,input.data())) return 11;
     if(!trained_margin(input.data(),d,nullptr,&actual)) return 6;
     const double err=std::fabs(static_cast<double>(actual)-expected);
     if(err>max_absolute_error)max_absolute_error=err;
@@ -55,6 +61,12 @@ int main(int argc,char** argv) {
     }
   }
   if(!f.good() && !f.eof()) return 8;
+  {
+    const float x[1]={1.0f},mu[1]={0.0f},bad_sigma[1]={0.0f};
+    float dest[1]={0.0f};
+    if(beacon_raw_mlp::standardize_channels<1,1>(
+        x,mu,bad_sigma,dest)) return 12;
+  }
 
   // One actual trained model callback through the experimental streaming
   // Q16 interface; this is only a structural smoke, not donor validity:
@@ -80,7 +92,7 @@ int main(int argc,char** argv) {
       input.data(),input.data(),weights::kTimeSteps,weights::kChannels,
       comp,36,prior,baseline,trained_margin,nullptr,scratch.data(),&outcome);
   if(!ok || outcome.extra_model_evaluations!=16) return 10;
-  std::cout << "MLP_FP32_PARITY_OK samples=" << n
+  std::cout << "MLP_FP32_PARITY_OK raw_normalization=1 samples=" << n
             << " max_abs_margin_error=" << max_absolute_error
             << " real_forward_calls=16"
             << std::endl;
