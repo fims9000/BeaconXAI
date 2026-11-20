@@ -90,3 +90,41 @@ def save_baseline_q16_fixture(
             fp.write(values.astype("<f8",copy=False).tobytes())
             fp.write(ids.astype("<u2",copy=False).tobytes())
             fp.write(ordering.astype("<u2",copy=False).tobytes())
+
+
+def render_board_reference_window_header(
+    raw_window: np.ndarray,
+    predicted_class: int,
+    selected_ids: np.ndarray,
+    ranked_ids: np.ndarray,
+) -> str:
+    """One frozen UCI HAR test window for future *on-device* self-test.
+
+    Do not use the reference identity to choose BEACON probes. The header is
+    generated only after independent model fitting and Python evaluation.
+    """
+    raw=np.asarray(raw_window,dtype=np.float32)
+    selected=np.asarray(selected_ids,dtype=int)
+    ranked=np.asarray(ranked_ids,dtype=int)
+    if (raw.ndim!=2 or not np.isfinite(raw).all()
+        or predicted_class<0 or selected.ndim!=1 or len(selected)!=16
+        or ranked.shape!=selected.shape or
+        len(set(selected.tolist()))!=16 or set(selected)!=set(ranked)
+        or np.any(selected<0) or np.any(ranked<0)):
+        raise ValueError("invalid frozen UCI HAR board reference")
+    lines=[
+        "#ifndef BEACON_EXPORTED_BOARD_REFERENCE_HPP",
+        "#define BEACON_EXPORTED_BOARD_REFERENCE_HPP",
+        "#include <cstdint>",
+        "// Frozen external held-out window: for board self-check only.",
+        "namespace beacon_reference {",
+        "constexpr unsigned kExpectedClass = "+str(int(predicted_class))+";",
+        _tensor_declaration("kRawInput",raw),
+        "static const uint16_t kExpectedSelected[16] = {"+
+            ",".join(str(int(x)) for x in sorted(selected))+"};",
+        "static const uint16_t kExpectedRanked[16] = {"+
+            ",".join(str(int(x)) for x in ranked)+"};",
+        "} // namespace beacon_reference",
+        "#endif // BEACON_EXPORTED_BOARD_REFERENCE_HPP",
+    ]
+    return "\n".join(lines)+"\n"
