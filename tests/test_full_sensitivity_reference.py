@@ -85,3 +85,41 @@ def test_invalid_model_type_fails_before_evaluation(tmp_path):
                          model="made_up")
     with pytest.raises(ValueError,match="Unknown model type"):
         study.run(args)
+
+
+def test_real_query_count_across_budget_grid(monkeypatch,tmp_path):
+    path=fake_npz(tmp_path)
+    class Model:
+        classes_=np.array([0,1],dtype=int)
+        calls=0
+        def predict_proba(self,features):
+            Model.calls+=len(features)
+            scores=np.tanh(features[:,0])
+            p=np.clip((scores+1)/2,.05,.95)
+            return np.column_stack((p,1-p))
+    class Adapter:
+        model=Model()
+    monkeypatch.setattr(study,"_train_extratrees_local",lambda *a: Adapter())
+    args=SimpleNamespace(npz_path=path,out_dir=tmp_path/"grid",
+                         max_test=6,seed=57,trees=12,time_bins=12,budget=16,
+                         q_grid="8,16,32",model="extratrees")
+    study.run(args)
+    # One cached baseline, 36 independent offline reference evaluations,
+    # and four tested strategies per Q in 8+16+32.
+    assert Model.calls==6*(1+36+4*(8+16+32))
+    with (args.out_dir/"summary.csv").open() as f:
+        rows=list(csv.DictReader(f))
+    assert len(rows)==13
+    assert {int(r["extra_model_evaluations"]) for r in rows}=={0,8,16,32}
+    m=json.loads((args.out_dir/"manifest.json").read_text())
+    assert m["budget_grid"]==[8,16,32]
+    assert m["budget_grid_evaluated_directly_not_simulated"]
+
+
+def test_duplicate_budget_grid_is_rejected(tmp_path):
+    path=fake_npz(tmp_path)
+    args=SimpleNamespace(npz_path=path,out_dir=tmp_path/"bad_grid",
+                         max_test=6,seed=57,trees=12,time_bins=12,budget=16,
+                         q_grid="8,8",model="extratrees")
+    with pytest.raises(ValueError,match="unique"):
+        study.run(args)
