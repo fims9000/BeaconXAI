@@ -23,6 +23,7 @@ def fake_npz(tmp_path, *, overlap=False):
 def test_full_reference_clean_windows_and_accounting(monkeypatch,tmp_path):
     path=fake_npz(tmp_path)
     class Model:
+        classes_=np.array([0,1],dtype=int)
         def predict_proba(self,feat):
             v=np.tanh(feat[:,0])
             p=np.clip((v+1)/2,.05,.95)
