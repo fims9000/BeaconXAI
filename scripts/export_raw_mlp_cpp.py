@@ -19,6 +19,9 @@ from beaconxai.cpp_mlp_export import render_raw_mlp_header,save_parity_fixture
 from beaconxai.datasets import fit_channel_standardizer,apply_standardizer,load_npz_dataset
 from beaconxai.subject_sampling import balanced_subject_sample
 from beaconxai.resource_accounting import mlp_resource_projection
+from beaconxai.cpp_adaptive_v2_export import render_class_means_header, save_baseline_q16_fixture
+from beaconxai.contrastive import fit_class_profiles, make_components, neutralize_interp
+from scripts.run_q16_matched_ablation import class_cheap, best_q
 
 
 def run(args):
@@ -66,6 +69,79 @@ def run(args):
         model.coefs_,model.intercepts_,sample_shape=parity_x.shape[1:],
         n_classes=len(classes),n_components=36,query_budget=16)
     discrepancy=np.abs(logit_gap-logp_gap)
+    adaptive_info=None
+    if getattr(args, "adaptive_parity", False):
+        q=16
+        components=make_components(parity_x.shape[1:],12,"pamap3")
+        class_profiles=fit_class_profiles(train,yt)
+        class_means=np.stack([class_profiles[int(c)][0] for c in classes])
+        means_exported=class_means.astype(np.float32)
+        profile_header=render_class_means_header(
+            class_means,sample_shape=parity_x.shape[1:])
+        (out/"beacon_adaptive_profiles.hpp").write_text(
+            profile_header,encoding="utf8")
+        n_classes=len(classes)
+        cheap_values=[]
+        source_classes=[]
+        selected_sets=[]
+        reference_ranks=[]
+        cutoff_gaps=[]
+        min_effect_separations=[]
+        quantized_profile_set_changes=0
+        max_prior_quantization_diff=0.0
+        for i,x in enumerate(parity_x):
+            a=int(np.argmax(lp[i]))
+            cheap=class_cheap(x,class_means[a],components)[2]
+            quantized=class_cheap(x,means_exported[a],components)[2]
+            if len(cheap)!=len(components) or not np.isfinite(cheap).all():
+                raise AssertionError("bad original adaptive_v2 prior")
+            selected=best_q(cheap,q)
+            if set(selected)!=set(best_q(quantized,q)):
+                quantized_profile_set_changes+=1
+            max_prior_quantization_diff=max(max_prior_quantization_diff,
+                float(np.max(np.abs(cheap-quantized))))
+            altered=np.stack([neutralize_interp(x,components[j]) for j in selected])
+            lp1=np.log(np.clip(model.predict_proba(
+                altered.reshape(q,-1)),1e-12,1.0))
+            moving=np.sort(lp1,axis=1)
+            original_margin=np.sort(lp[i])[-1]-np.sort(lp[i])[-2]
+            effects=np.abs(original_margin-(moving[:,-1]-moving[:,-2]))
+            ordering=[selected[j] for j in np.argsort(-effects,kind="stable")]
+            cheap_sorted=np.sort(cheap)
+            cutoff=float(cheap_sorted[-q]-cheap_sorted[-q-1])
+            effect_gap=float(min(
+                abs(float(effects[u]-effects[v]))
+                for u in range(q) for v in range(u+1,q)))
+            source_classes.append(a)
+            cheap_values.append(cheap)
+            selected_sets.append(sorted(selected))
+            reference_ranks.append(ordering)
+            cutoff_gaps.append(cutoff)
+            min_effect_separations.append(effect_gap)
+        save_baseline_q16_fixture(
+            out/"adaptive_v2_q16_parity.bin",xv[idx],
+            np.asarray(source_classes),np.stack(cheap_values),
+            np.asarray(selected_sets),np.asarray(reference_ranks),
+            np.asarray(cutoff_gaps),np.asarray(min_effect_separations))
+        adaptive_info={
+            "reference":"Original Python adaptive_v2 _component_cheap_scores"
+                " + np.argpartition(-prior) + moving top-two log-prob margin",
+            "n_components":len(components),
+            "query_budget":q,
+            "selected_ids_compared_as_set":True,
+            "argpartition_candidate_order_not_stable":True,
+            "n_profile_fp32_quantization_changes_to_candidate_set":
+                quantized_profile_set_changes,
+            "max_abs_prior_difference_from_fp32_class_mean":
+                max_prior_quantization_diff,
+            "n_ambiguous_prior_cutoffs_at_1e6":int(np.sum(
+                np.asarray(cutoff_gaps)<=1e-6)),
+            "n_ambiguous_measured_effect_orders_at_1e6":int(np.sum(
+                np.asarray(min_effect_separations)<=1e-6)),
+            "class_profile_fp32_bytes":int(means_exported.nbytes),
+            "exported_class_profile_bytes":len(profile_header.encode()),
+            "raw_input_reference_labels_never_read":True
+        }
     manifest={
         "data_npz_sha256":hashlib.sha256(fn.read_bytes()).hexdigest(),
         "dataset":"UCI HAR official subject-disjoint train/test split",
@@ -88,6 +164,7 @@ def run(args):
         "parity_fixture_contains_raw_unnormalized_sensor_input":True,
         "cpp_training_mu_sigma_parity_required":True,
         "not_firmware_or_MCU_validated":True,
+        "adaptive_v2_baseline_parity":adaptive_info,
     }
     (out/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf8")
     print(json.dumps({
@@ -97,6 +174,7 @@ def run(args):
             "max_abs_difference_logit_gap_vs_clipped_log_probability_gap"],
         "header_bytes":len(header.encode()),
         "not_hardware_validated":True,
+        "baseline_adaptive_q16_parity":adaptive_info,
     },sort_keys=True),flush=True)
 
 
@@ -106,6 +184,8 @@ def main():
     p.add_argument("--out-dir",type=Path,required=True)
     p.add_argument("--seed",type=int,default=57)
     p.add_argument("--parity-samples",type=int,default=12)
+    p.add_argument("--adaptive-parity",action="store_true",
+                   help="Export training class means plus original Q16 set/rank fixtures")
     run(p.parse_args())
 
 
