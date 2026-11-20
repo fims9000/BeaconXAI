@@ -9,6 +9,9 @@ on:
       - 'embedded/adaptive_v2_firmware/**'
       - 'embedded/adaptive_v2_audit.hpp'
       - 'embedded/raw_mlp_inference.hpp'
+      - 'embedded/staged_adaptive_upgrade.hpp'
+      - 'beaconxai/staged_budget.py'
+      - 'scripts/run_clean_calibrated_staged_budget.py'
       - 'beaconxai/cpp_mlp_export.py'
       - 'beaconxai/cpp_adaptive_v2_export.py'
       - 'scripts/export_raw_mlp_cpp.py'
@@ -20,6 +23,14 @@ concurrency:
 
 permissions:
   contents: read
+
+env:
+  OMP_NUM_THREADS: '1'
+  OPENBLAS_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  VECLIB_MAXIMUM_THREADS: '1'
+  NUMEXPR_NUM_THREADS: '1'
+  PYTHONHASHSEED: '0'
 
 jobs:
   build:
@@ -42,7 +53,7 @@ jobs:
           python scripts/export_raw_mlp_cpp.py \
             --npz-path data/uci_har_official_subjects.npz \
             --out-dir outputs_composite/esp32c3_model \
-            --adaptive-parity --parity-samples 96 --seed 57
+            --adaptive-parity --staged-parity --parity-samples 96 --seed 57
       - name: Stage versioned runtime and generated weights for ESP32-C3
         run: |
           set -eu
@@ -51,16 +62,24 @@ jobs:
             embedded/adaptive_v2_firmware/include/
           cp embedded/raw_mlp_inference.hpp \
             embedded/adaptive_v2_firmware/include/
+          cp embedded/staged_adaptive_upgrade.hpp \
+            embedded/adaptive_v2_firmware/include/
           cp outputs_composite/esp32c3_model/beacon_mlp_model.hpp \
             embedded/adaptive_v2_firmware/include/
           cp outputs_composite/esp32c3_model/beacon_adaptive_profiles.hpp \
             embedded/adaptive_v2_firmware/include/
           cp outputs_composite/esp32c3_model/beacon_board_reference.hpp \
             embedded/adaptive_v2_firmware/include/
+          cp outputs_composite/esp32c3_model/beacon_staged_policy.hpp \
+            embedded/adaptive_v2_firmware/include/
+          cp outputs_composite/esp32c3_model/beacon_board_staged_reference.hpp \
+            embedded/adaptive_v2_firmware/include/
       - name: Cross-compile actual ESP32-C3 firmware (NO physical runtime)
         run: |
           pio run -d embedded/adaptive_v2_firmware -e esp32c3
           pio run -d embedded/adaptive_v2_firmware -e esp32c3 -t size
+          pio run -d embedded/adaptive_v2_firmware -e esp32c3_upgrade
+          pio run -d embedded/adaptive_v2_firmware -e esp32c3_upgrade -t size
       - name: Collect binary and build receipts
         if: always()
         run: |
@@ -84,6 +103,18 @@ jobs:
             if test -f embedded/adaptive_v2_firmware/.pio/build/esp32c3/firmware.map; then
               cp embedded/adaptive_v2_firmware/.pio/build/esp32c3/firmware.map \
                 outputs_composite/esp32c3_firmware/
+            fi
+          fi
+          if test -f embedded/adaptive_v2_firmware/.pio/build/esp32c3_upgrade/firmware.bin; then
+            cp embedded/adaptive_v2_firmware/.pio/build/esp32c3_upgrade/firmware.bin \
+              outputs_composite/esp32c3_firmware/firmware_upgrade.bin
+            cp embedded/adaptive_v2_firmware/.pio/build/esp32c3_upgrade/firmware.elf \
+              outputs_composite/esp32c3_firmware/firmware_upgrade.elf
+            (cd outputs_composite/esp32c3_firmware && \
+              sha256sum firmware_upgrade.bin > firmware_upgrade.sha256)
+            if test -f embedded/adaptive_v2_firmware/.pio/build/esp32c3_upgrade/firmware.map; then
+              cp embedded/adaptive_v2_firmware/.pio/build/esp32c3_upgrade/firmware.map \
+                outputs_composite/esp32c3_firmware/firmware_upgrade.map
             fi
           fi
       - uses: actions/upload-artifact@v4
