@@ -1,0 +1,65 @@
+name: BEACON full Q16 host timing and projected MCU resource budget
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uci_har_host_resources.yml'
+      - 'scripts/profile_full_audit_host.py'
+      - 'tests/test_host_resource_profile.py'
+      - 'beaconxai/resource_accounting.py'
+      - 'tests/test_resource_accounting.py'
+      - 'beaconxai/dual_operator_audit.py'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  cpu-reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install package
+        run: python -m pip install -e . pytest
+      - name: Verify resource calculation and end-to-end profiler
+        run: |
+          python -m pytest -q tests/test_resource_accounting.py \
+            tests/test_host_resource_profile.py \
+            tests/test_dual_operator_audit.py
+      - name: Prepare official UCI HAR subject-disjoint dataset
+        run: |
+          python scripts/preprocess_uci_har_for_q36.py \
+            --root data/uci_har --out data/uci_har_official_subjects.npz
+      - name: Measure host CPU timing and projected tensor buffer sizes
+        run: |
+          python -u scripts/profile_full_audit_host.py \
+            --npz-path data/uci_har_official_subjects.npz \
+            --out-dir outputs_composite/uci_har_q16_host_resources \
+            --max-test 12 --budget 16 --warmups 2 --repeats 5 --seed 57
+      - name: Save exact commit and package versions
+        if: always()
+        run: |
+          mkdir -p outputs_composite/uci_har_q16_host_resources
+          {
+            git rev-parse HEAD
+            python --version
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pytest'
+            if test -f data/uci_har_official_subjects.npz; then sha256sum data/uci_har_official_subjects.npz; fi
+          } > outputs_composite/uci_har_q16_host_resources/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: uci-har-q16-host-resource-projection
+          path: outputs_composite/uci_har_q16_host_resources/
+          retention-days: 30
+          if-no-files-found: warn
