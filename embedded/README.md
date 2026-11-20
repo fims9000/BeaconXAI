@@ -42,3 +42,48 @@ DONE
 Notes:
 - This benchmark is for compact policy layer `h(a(x))` only.
 - Full BEACON audit (`Q+1` model calls) is not MCU-side.
+
+
+## Experimental full BEACON Q16 audit (not the policy-only benchmark)
+
+The separate header `embedded/dual_operator_audit.hpp` is a heap-free C++11
+**streaming** implementation of the fixed 8+8 dual-operator research control.
+It is **not** the main BEACON algorithm and **must not** be enabled as the
+default explanation method: independent UCI HAR validation showed that
+combining two operators reduced full-reference agreement and its uncalibrated
+"report/abstain" flag had many false positives.
+
+It uses eight distinct train-prior-selected components, each intervened with
+(a) interpolation and (b) a train-only rival-class medoid with taper=2, for
+**exactly 16 separate model-example evaluations**. The real classifier is
+supplied by a callback with signature:
+
+```cpp
+using MarginFn = bool (*)(const float* sample, size_t n_values,
+                          void* user_ctx, float* out_top2_log_margin);
+```
+
+The callback must produce the difference between the two largest **log
+class scores**, using the same definition for the cached original margin.
+Passing raw probability margins would change the scientific method.
+
+The application supplies a writable `float[T*C]` scratch buffer; the header
+does not allocate a Q×window batch or heap storage. Output includes
+`extra_model_evaluations`, ranked IDs and a diagnostic `reported` flag.
+The latter is **not** a calibration or causality guarantee. The header does
+not contain a trained classifier, inference tensor arena, DSP feature builder
+or power/flash measurement.
+
+Host C++11 acceptance check (also in CI):
+
+```bash
+g++ -std=c++11 -O2 -Wall -Wextra -Werror -pedantic \
+  embedded/tests/test_dual_operator.cpp -o /tmp/beacon-q16-cpp-test
+/tmp/beacon-q16-cpp-test
+```
+
+For model-dependent **host CPU** times and conservative explicit array-byte
+projections, see `scripts/profile_full_audit_host.py` and
+`beaconxai/resource_accounting.py`. These do not measure actual ESP32-C3
+RAM, program flash or energy. A full board benchmark requires a validated
+deployable model and measurement hardware; none is present in this branch.
