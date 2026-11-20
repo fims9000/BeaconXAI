@@ -23,6 +23,7 @@ from beaconxai.datasets import load_npz_dataset, fit_channel_standardizer, apply
 from beaconxai.contrastive import fit_class_profiles, make_components, neutralize_interp
 from beaconxai.real_donor import fit_real_donor_bank, make_target_replacement
 from beaconxai.dual_operator_audit import dual_operator_audit
+from beaconxai.model_quality import heldout_model_quality
 from beaconxai.subject_sampling import balanced_subject_sample
 from beaconxai.sensitivity_reference import (
     moving_margin_effects, rank_effects, reference_metrics, subject_macro_summary
@@ -33,7 +34,7 @@ from scripts.run_q16_matched_ablation import best_q, class_cheap, evaluate_selec
 
 def study(args):
     path=Path(args.npz_path)
-    xt,yt,xv,_=load_npz_dataset(path)
+    xt,yt,xv,yv=load_npz_dataset(path)
     with np.load(path) as z:
         st,sv=z["subject_train"],z["subject_test"]
     if set(map(int,np.unique(st)))&set(map(int,np.unique(sv))):
@@ -77,6 +78,10 @@ def study(args):
         return np.log(np.clip(out,1e-12,1))
 
     baselines=model(test)
+    # Test activity labels used ONLY after fixed model fitting in offline
+    # classifier diagnostics; not in shortlist/Q16/donor/abstention behavior.
+    full_test=apply_standardizer(xv,mu,std)
+    quality,quality_subjects=heldout_model_quality(model(full_test),yv,sv)
     rows=[]
     breakdown=[]
     consensus_rows=[]
@@ -183,6 +188,9 @@ def study(args):
     write_csv(out/"per_subject.csv",subject)
     write_csv(out/"per_sample.csv",rows)
     write_csv(out/"operator_reference_comparison.csv",breakdown)
+    write_csv(out/"classifier_quality_per_subject.csv",quality_subjects)
+    (out/"classifier_quality.json").write_text(
+        json.dumps(quality,indent=2),encoding="utf8")
     write_csv(out/"dual_operator_per_sample.csv",consensus_rows)
     write_csv(out/"dual_operator_per_subject.csv",consensus_subjects)
     write_csv(out/"dual_operator_summary.csv",consensus_summary)
@@ -199,6 +207,7 @@ def study(args):
         "comparison_operator":"interpolation neutralization full Q=M",
         "reference_is_causal_truth":False,
         "no_test_activity_labels_read_for_inference":True,
+        "heldout_classifier_quality_diagnostics_only":"classifier_quality.json",
         "donor_bank_memory_bytes":bank.bank_bytes,
         "offline_full_reference_evaluations_per_window":2*M,
         "extra_model_queries_medoid_q16":args.budget,
@@ -224,6 +233,7 @@ def study(args):
         ]
     }
     (out/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf8")
+    print("CLASSIFIER_QUALITY",json.dumps(quality,sort_keys=True),flush=True)
     print("=== full interpolation vs full real-medoid operator on natural signals ===")
     for r in summ:
         print(f"{r['method']:28} Q={r['extra_model_evaluations']:2d} "
