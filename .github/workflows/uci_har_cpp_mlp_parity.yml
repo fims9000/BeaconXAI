@@ -13,6 +13,7 @@ on:
       - 'embedded/tests/test_exported_mlp.cpp'
       - 'embedded/adaptive_v2_audit.hpp'
       - 'embedded/tests/test_adaptive_v2_exported_mlp.cpp'
+      - 'embedded/tests/test_adaptive_v2_core.cpp'
       - 'beaconxai/cpp_adaptive_v2_export.py'
       - 'tests/test_cpp_adaptive_v2_export.py'
       - 'embedded/dual_operator_audit.hpp'
@@ -40,6 +41,12 @@ jobs:
         run: |
           python -m pytest -q tests/test_cpp_mlp_export.py \
             tests/test_cpp_adaptive_v2_export.py tests/test_resource_accounting.py
+      - name: Compile and verify baseline C++ Q16 negative controls
+        run: |
+          g++ -std=c++11 -O2 -Wall -Wextra -Werror -pedantic \
+            embedded/tests/test_adaptive_v2_core.cpp \
+            -o /tmp/beacon-adaptive-v2-core
+          /tmp/beacon-adaptive-v2-core
       - name: Preprocess official UCI HAR
         run: |
           python scripts/preprocess_uci_har_for_q36.py \
