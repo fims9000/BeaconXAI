@@ -87,3 +87,39 @@ projections, see `scripts/profile_full_audit_host.py` and
 `beaconxai/resource_accounting.py`. These do not measure actual ESP32-C3
 RAM, program flash or energy. A full board benchmark requires a validated
 deployable model and measurement hardware; none is present in this branch.
+
+
+## Actual trained raw-input MLP: C++ FP32 export and numeric parity
+
+The reproducible host export pipeline is `scripts/export_raw_mlp_cpp.py`.
+It trains `MLPClassifier(hidden=32)` on the official **training
+participants** of UCI HAR, exports FP32 weights/biases and **training-only**
+channel means/standard deviations, and saves test-window parity fixtures.
+No giant generated header is committed to Git; GitHub Actions retains it as
+a run artifact.
+
+```bash
+python scripts/preprocess_uci_har_for_q36.py \
+  --root data/uci_har --out data/uci_har_official_subjects.npz
+python scripts/export_raw_mlp_cpp.py \
+  --npz-path data/uci_har_official_subjects.npz \
+  --out-dir outputs_composite/uci_har_mlp_cpp --parity-samples 12 --seed 57
+g++ -std=c++11 -O2 -Wall -Wextra -Werror -pedantic \
+  -Ioutputs_composite/uci_har_mlp_cpp \
+  embedded/tests/test_exported_mlp.cpp -o /tmp/beacon-raw-mlp-parity
+/tmp/beacon-raw-mlp-parity outputs_composite/uci_har_mlp_cpp/model_parity_f32.bin
+```
+
+`embedded/raw_mlp_inference.hpp` standardizes **raw** sensor readings using
+the exported training statistics, executes a float32 ReLU+softmax MLP and
+returns the top-two pre-softmax logit difference. That difference equals
+the top-two log-probability margin unless the Python implementation clips
+extremely small probabilities, a discrepancy audited in the export
+manifest. The test runs the exported *real classifier* through the Q16
+callback with a **dummy donor** only to verify model-call integration.
+
+The exporter and parity runner do **not** verify class correctness after
+quantization (none is performed), physical RAM/Flash allocation, execution
+time/energy on ESP32-C3, or causal validity of the audit. The dual-operator
+abstention method is an **unpromoted negative research control**, not the
+recommended default explanation.
