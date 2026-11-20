@@ -50,8 +50,26 @@ def test_real_medoid_vs_interp_reference_no_test_label_use(monkeypatch,tmp_path)
     assert m["M"]==36 and m["Q"]==16 and m["n_samples"]==10
     assert m["donor_bank_memory_bytes"]>0
     assert m["no_test_activity_labels_read_for_inference"]
-    assert FakeModel.calls==10*(1+2*36+3*16)
+    # Original three single-operator controls + one dual Q8+Q8 audit.
+    assert FakeModel.calls==10*(1+2*36+4*16)
+    with (out/"dual_operator_summary.csv").open() as f:
+        dual_summary=list(csv.DictReader(f))
+    assert {r["method"] for r in dual_summary}=={
+        "dual_operator_q16","interpolation_q16","medoid_q16",
+        "uniform_medoid_q16"}
+    assert all(int(r["extra_model_evaluations"])==16 for r in dual_summary)
+    with (out/"dual_operator_per_sample.csv").open() as f:
+        dual_samples=list(csv.DictReader(f))
+    assert len(dual_samples)==10*4
+    dual_rows=[r for r in dual_samples if r["method"]=="dual_operator_q16"]
+    assert all(int(r["distinct_probed_components"])==8 for r in dual_rows)
+    assert all(r["reported_not_abstained"] in ("0","1") for r in dual_rows)
+    gate=json.loads((out/"dual_operator_gate.json").read_text())
+    assert gate["n_windows"]==10
+    assert gate["full_q36_references_used_at_inference"] is False
+    assert gate["not_a_causal_or_calibrated_coverage_guarantee"] is True
     orig=(out/"per_sample.csv").read_bytes()
+    orig_dual=(out/"dual_operator_per_sample.csv").read_bytes()
     # Change ONLY held-out activity labels: ranks cannot change.
     with np.load(fn) as z:
         data={key:z[key].copy() for key in z.files}
@@ -60,6 +78,7 @@ def test_real_medoid_vs_interp_reference_no_test_label_use(monkeypatch,tmp_path)
     out2=tmp_path/"out2"
     study.study(SimpleNamespace(**{**vars(args),"out_dir":out2}))
     assert orig==(out2/"per_sample.csv").read_bytes()
+    assert orig_dual==(out2/"dual_operator_per_sample.csv").read_bytes()
 
 
 def test_subject_overlap_rejected(tmp_path):
