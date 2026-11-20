@@ -48,9 +48,9 @@ def test_train_calibration_and_genuine_outer_stopping(monkeypatch,tmp_path):
     with (args.out_dir/"summary.csv").open() as fp:
         summary=list(csv.DictReader(fp))
     assert {r["method"] for r in summary}==set(study.METHODS)
-    assert len(summary)==5
+    assert len(summary)==7
     per_sample=list(csv.DictReader((args.out_dir/"per_sample.csv").open()))
-    assert len(per_sample)==40
+    assert len(per_sample)==56
     assert all(int(r["extra_model_evaluations"]) in (0,8,16,32)
                for r in per_sample)
     manifest=json.loads((args.out_dir/"manifest.json").read_text())
@@ -62,9 +62,12 @@ def test_train_calibration_and_genuine_outer_stopping(monkeypatch,tmp_path):
         policy["fit"]["inner_validation_subjects"])
     assert not set(policy["fit"]["calibration_subjects"]) & {10,11}
     assert manifest["outer_total_measured_model_examples_including_controls"]==(
-        8*(1+36+8+16+32) +
-        sum(int(r["extra_model_evaluations"]) for r in per_sample
-            if r["method"]=="calibrated_policy"))
+        8*(1+36) +
+        sum(int(r["extra_model_evaluations"]) for r in per_sample))
+    assert manifest["constrained_upgrade_queries_actual"]>=16*8
+    assert manifest["random_budget_queries_actual"]>=16*8
+    assert all(int(r["extra_model_evaluations"])>=16 for r in per_sample
+               if r["method"]=="constrained_upgrade16")
     before=(args.out_dir/"per_sample.csv").read_bytes()
     with np.load(path) as fp:
         data={key:fp[key].copy() for key in fp.files}
