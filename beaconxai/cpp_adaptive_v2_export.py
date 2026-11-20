@@ -194,3 +194,31 @@ def save_staged_upgrade_fixture(
             fp.write(struct.pack("<IIdd",int(source),int(budget),float(g),float(sep)))
             fp.write(np.asarray(selected,dtype="<u2").tobytes())
             fp.write(np.asarray(ordering,dtype="<u2").tobytes())
+
+
+def render_board_staged_reference_header(
+    q: int, selected: list[int], ranked: list[int], gap16: float
+) -> str:
+    """One frozen external raw-window expected result, self-test only."""
+    if (q not in (16,32) or len(selected)!=q or len(ranked)!=q
+        or not np.isfinite(gap16) or gap16<0
+        or len(set(selected))!=q or set(selected)!=set(ranked)
+        or any(v<0 or v>=36 for v in selected+ranked)):
+        raise ValueError("invalid frozen staged board oracle receipt")
+    chosen=sorted(selected)+[65535]*(32-q)
+    order=ranked+[65535]*(32-q)
+    return "\n".join((
+        "#ifndef BEACON_EXPORTED_BOARD_STAGED_REFERENCE_HPP",
+        "#define BEACON_EXPORTED_BOARD_STAGED_REFERENCE_HPP",
+        "#include <cstdint>",
+        "// Frozen functional self-test, not production scoring/selection.",
+        "namespace beacon_board_staged {",
+        f"constexpr unsigned kExpectedQ = {q};",
+        "constexpr float kExpectedGap16 = "+_c_float(gap16)+";",
+        "static const uint16_t kExpectedSelected[32] = {"+
+            ",".join(map(str,chosen))+"};",
+        "static const uint16_t kExpectedRanked[32] = {"+
+            ",".join(map(str,order))+"};",
+        "}",
+        "#endif",
+    ))+"\n"
