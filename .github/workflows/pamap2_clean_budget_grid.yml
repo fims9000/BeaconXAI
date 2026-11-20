@@ -1,0 +1,97 @@
+name: PAMAP2 natural-signal Q8-Q16-Q32 budget frontier
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/pamap2_clean_budget_grid.yml'
+      - 'scripts/run_full_sensitivity_reference.py'
+      - 'tests/test_full_sensitivity_reference.py'
+      - 'beaconxai/sensitivity_reference.py'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  budget-frontier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - model: extratrees
+            heldout: '1'
+            tag: s1
+            max_test: 64
+          - model: extratrees
+            heldout: '2,3'
+            tag: s2s3
+            max_test: 64
+          - model: extratrees
+            heldout: '4,5'
+            tag: s4s5
+            max_test: 64
+          - model: extratrees
+            heldout: '6,7'
+            tag: s6s7
+            max_test: 64
+          - model: extratrees
+            heldout: '8,9'
+            tag: s8s9
+            max_test: 64
+          - model: raw_mlp
+            heldout: '2,3'
+            tag: s2s3
+            max_test: 32
+          - model: raw_mlp
+            heldout: '8,9'
+            tag: s8s9
+            max_test: 32
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install source and tests
+        run: python -m pip install -e . pytest
+      - name: Verify Q8 Q16 Q32 direct-budget accounting
+        run: python -m pytest -q tests/test_full_sensitivity_reference.py tests/test_sensitivity_reference.py
+      - name: Prepare PAMAP2 heldout subjects
+        run: |
+          python scripts/preprocess_pamap2.py \
+            --data-root data --window-length 200 --step 100 \
+            --min-purity 0.95 --test-subjects '${{ matrix.heldout }}' \
+            --out data/pamap2_${{ matrix.tag }}.npz
+      - name: Evaluate same Q36 reference and all true Q budgets
+        run: |
+          python -u scripts/run_full_sensitivity_reference.py \
+            --npz-path data/pamap2_${{ matrix.tag }}.npz \
+            --out-dir outputs_composite/q_grid_${{ matrix.model }}_${{ matrix.tag }} \
+            --model ${{ matrix.model }} \
+            --max-test ${{ matrix.max_test }} \
+            --q-grid 8,16,32 --seed 57
+      - name: Record commit and data checksum
+        if: always()
+        run: |
+          mkdir -p outputs_composite/q_grid_${{ matrix.model }}_${{ matrix.tag }}
+          {
+            git rev-parse HEAD
+            python --version
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pytest'
+            if test -f data/pamap2_${{ matrix.tag }}.npz; then sha256sum data/pamap2_${{ matrix.tag }}.npz; fi
+          } > outputs_composite/q_grid_${{ matrix.model }}_${{ matrix.tag }}/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: q-grid-${{ matrix.model }}-${{ matrix.tag }}
+          path: outputs_composite/q_grid_${{ matrix.model }}_${{ matrix.tag }}/
+          if-no-files-found: warn
+          retention-days: 30
