@@ -184,3 +184,56 @@ model-call checks. The board prints a **single-window** microsecond timer
 and a minimum-free-heap indicator; neither is a distribution of latencies
 nor a measurement of total peak RAM. Energy must be measured externally.
 Never present the unit-test's artificial UART string as a hardware result.
+
+
+### Optional Q16→Q32 firmware (not enabled by default)
+
+The **separate** PlatformIO environment `esp32c3_upgrade` compiles the
+experimental, inner-train-calibrated `Q16→Q32` policy. It always executes
+the full original Q16 and may evaluate 16 additional, previously unqueried
+components when the measured Q16 third-to-fourth effect gap is below the
+frozen training threshold. The default `esp32c3` build retains Q16 only.
+
+Both builds use **the same real exported MLP** and train-only class profiles:
+
+```bash
+python scripts/export_raw_mlp_cpp.py \
+  --npz-path data/uci_har_official_subjects.npz \
+  --out-dir outputs_composite/esp32c3_model \
+  --adaptive-parity --staged-parity --parity-samples 96 --seed 57
+mkdir -p embedded/adaptive_v2_firmware/include
+cp embedded/adaptive_v2_audit.hpp embedded/raw_mlp_inference.hpp \
+  embedded/staged_adaptive_upgrade.hpp \
+  outputs_composite/esp32c3_model/beacon_mlp_model.hpp \
+  outputs_composite/esp32c3_model/beacon_adaptive_profiles.hpp \
+  outputs_composite/esp32c3_model/beacon_board_reference.hpp \
+  outputs_composite/esp32c3_model/beacon_staged_policy.hpp \
+  outputs_composite/esp32c3_model/beacon_board_staged_reference.hpp \
+  embedded/adaptive_v2_firmware/include/
+pio run -d embedded/adaptive_v2_firmware -e esp32c3
+pio run -d embedded/adaptive_v2_firmware -e esp32c3_upgrade
+```
+
+The exporter prefers an independently evaluated **Q32-upgraded held-out
+window** for the frozen UART functional check when one exists, so optional
+firmware can eventually test the extension branch. It rewrites the
+default-Q16 frozen reference to use the same input but its own expected
+Q16 rankings. The generated `manifest.json` records which reference case
+was selected. Neither firmware has been run on hardware.
+
+For an *actual physically captured* optional-mode serial log use:
+
+```bash
+python scripts/check_esp32c3_audit_log.py \
+  --mode staged --uart-log outputs_composite/esp32c3_staged_uart.log \
+  --out outputs_composite/esp32c3_staged_hardware_acceptance.json
+```
+
+The parser refuses failed class, model-call budget, shortlist, top-3 set
+or gap16 comparison; format-valid text alone does not prove physical
+hardware origin. Linker-reported static RAM and application Flash usage
+are not peak runtime RAM, power or causally valid explanations. The staged
+policy remains **research-only**: on UCI HAR, mean Q≈19.73 improved MLP
+top-3 Q36 response fidelity to 85.93% from fixed Q16's 80%, but the cost
+penalty utility was *worse* and this was neither cross-dataset generalization
+nor independent causal attribution.
