@@ -11,6 +11,8 @@ on:
       - 'beaconxai/resource_accounting.py'
       - 'tests/test_resource_accounting.py'
       - 'beaconxai/dual_operator_audit.py'
+      - 'embedded/dual_operator_audit.hpp'
+      - 'embedded/tests/test_dual_operator.cpp'
   workflow_dispatch:
 
 concurrency:
@@ -21,6 +23,18 @@ permissions:
   contents: read
 
 jobs:
+  cpp-streaming-port:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile heap-free Q16 C++11 callback bridge
+        run: |
+          g++ -std=c++11 -O2 -Wall -Wextra -Werror -pedantic \
+            embedded/tests/test_dual_operator.cpp -o /tmp/beacon-q16-cpp-test
+      - name: Verify streaming interpolation, donor taper and exact calls
+        run: /tmp/beacon-q16-cpp-test
+
   cpu-reference:
     runs-on: ubuntu-latest
     timeout-minutes: 90
