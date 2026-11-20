@@ -42,7 +42,7 @@ jobs:
           python scripts/export_raw_mlp_cpp.py \
             --npz-path data/uci_har_official_subjects.npz \
             --out-dir outputs_composite/esp32c3_model \
-            --adaptive-parity --parity-samples 32 --seed 57
+            --adaptive-parity --parity-samples 96 --seed 57
       - name: Stage versioned runtime and generated weights for ESP32-C3
         run: |
           set -eu
