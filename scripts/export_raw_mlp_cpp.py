@@ -24,7 +24,10 @@ from beaconxai.cpp_mlp_export import render_raw_mlp_header,save_parity_fixture
 from beaconxai.datasets import fit_channel_standardizer,apply_standardizer,load_npz_dataset
 from beaconxai.subject_sampling import balanced_subject_sample
 from beaconxai.resource_accounting import mlp_resource_projection
-from beaconxai.cpp_adaptive_v2_export import render_class_means_header, save_baseline_q16_fixture
+from beaconxai.cpp_adaptive_v2_export import (
+    render_class_means_header, save_baseline_q16_fixture,
+    render_board_reference_window_header,
+)
 from beaconxai.contrastive import fit_class_profiles, make_components, neutralize_interp
 from scripts.run_q16_matched_ablation import class_cheap, best_q
 
@@ -128,6 +131,13 @@ def run(args):
             np.asarray(source_classes),np.stack(cheap_values),
             np.asarray(selected_sets),np.asarray(reference_ranks),
             np.asarray(cutoff_gaps),np.asarray(min_effect_separations))
+        # One frozen raw test window for eventual board self-check. The
+        # expected answer NEVER enters the adaptive_v2 model/candidate path.
+        reference_header=render_board_reference_window_header(
+            xv[idx[0]],source_classes[0],
+            np.asarray(selected_sets[0]),np.asarray(reference_ranks[0]))
+        (out/"beacon_board_reference.hpp").write_text(
+            reference_header,encoding="utf8")
         adaptive_info={
             "reference":"Original Python adaptive_v2 _component_cheap_scores"
                 " + np.argpartition(-prior) + moving top-two log-prob margin",
