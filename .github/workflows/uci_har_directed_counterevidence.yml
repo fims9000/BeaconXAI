@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/uci_har_directed_counterevidence.yml'
       - 'beaconxai/directed_evidence.py'
+      - 'beaconxai/active_residual_evidence.py'
+      - 'tests/test_active_residual_evidence.py'
       - 'beaconxai/conformal_evidence.py'
       - 'scripts/run_cheap_directed_counterevidence.py'
       - 'tests/test_directed_evidence.py'
@@ -45,7 +47,8 @@ jobs:
       - name: Verify source-identity logic and no y_test leakage
         run: |
           python -m pytest -q tests/test_directed_evidence.py \
-            tests/test_cheap_directed_counterevidence.py
+            tests/test_cheap_directed_counterevidence.py \
+            tests/test_active_residual_evidence.py
       - name: Prepare subject-disjoint UCI HAR
         run: |
           python scripts/preprocess_uci_har_for_q36.py \
