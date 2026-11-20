@@ -5,7 +5,8 @@ import pytest
 
 from beaconxai.cpp_adaptive_v2_export import (
     render_class_means_header, save_baseline_q16_fixture,
-    render_staged_upgrade_policy_header, save_staged_upgrade_fixture
+    render_staged_upgrade_policy_header, save_staged_upgrade_fixture,
+    render_board_staged_reference_header
 )
 
 
@@ -100,3 +101,15 @@ def test_staged_fixture_rejects_wrong_budget_and_duplicate_id(tmp_path):
             [list(range(15))+[14]],[list(range(16))])
     with pytest.raises(ValueError):
         render_staged_upgrade_policy_header(-.1)
+
+
+def test_frozen_staged_board_result_has_independent_expected_ids():
+    selected=list(range(16))
+    ranked=list(range(15,-1,-1))
+    text=render_board_staged_reference_header(16,selected,ranked,.013)
+    assert "kExpectedQ = 16;" in text
+    assert "kExpectedGap16" in text
+    assert "kExpectedSelected[32]" in text
+    assert "65535" in text
+    with pytest.raises(ValueError):
+        render_board_staged_reference_header(17,selected,ranked,.013)
