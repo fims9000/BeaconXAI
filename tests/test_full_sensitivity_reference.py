@@ -24,7 +24,9 @@ def test_full_reference_clean_windows_and_accounting(monkeypatch,tmp_path):
     path=fake_npz(tmp_path)
     class Model:
         classes_=np.array([0,1],dtype=int)
+        calls=0
         def predict_proba(self,feat):
+            Model.calls+=len(feat)
             v=np.tanh(feat[:,0])
             p=np.clip((v+1)/2,.05,.95)
             return np.column_stack((p,1-p))
@@ -47,6 +49,8 @@ def test_full_reference_clean_windows_and_accounting(monkeypatch,tmp_path):
     assert manifest["no_injected_synthetic_patch"]
     assert manifest["additional_reference_queries_per_window_offline"]==36
     assert manifest["per_subject_windows"]=={"8":5,"9":5}
+    # One cached baseline + full Q=36 offline reference + four genuine Q=16 methods.
+    assert Model.calls == 10*(1 + 36 + 4*16)
     assert (args.out_dir/"reference_windows.csv").exists()
 
 
