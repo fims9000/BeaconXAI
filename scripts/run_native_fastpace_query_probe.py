@@ -29,6 +29,7 @@ from beaconxai.real_donor import fit_real_donor_bank, nearest_context_index
 from beaconxai.subject_sampling import balanced_subject_sample
 from scripts.run_clean_calibrated_staged_budget import fit_predictor
 from scripts.run_q16_matched_ablation import write_csv
+from scripts.run_verified_counterfactual_benchmark import gravity_residual_roughness
 
 UPSTREAM_SHA = "4bbeae86bbc6ad02f7ee79fb550c9866682f6deb"
 
@@ -75,7 +76,7 @@ def instantiate_fastpace(native_class, wrapper, outliers, train_nct,
 
 
 def run_fastpace(native_class, model_func, train_nct, outliers,
-                 x, donor, target, cap, plan_calls, seed):
+                 x, donor, target, cap, plan_calls, seed, train_mean, train_scale):
     model=MeteredFastPACEModel(
         model_func, x.shape[1], x.shape[0], 6, max_evaluations=cap
     )
@@ -128,6 +129,11 @@ def run_fastpace(native_class, model_func, train_nct, outliers,
         "full_training_donor":(
             int(np.allclose(result,donor,rtol=1e-6,atol=1e-6))
             if result is not None else 0
+        ),
+        "gravity_residual_roughness_ratio":(
+            float(gravity_residual_roughness(result,train_mean,train_scale) /
+                  max(gravity_residual_roughness(x,train_mean,train_scale),1e-6))
+            if result is not None else None
         ),
     }
 
@@ -200,7 +206,8 @@ def run(args):
             measured=run_fastpace(
                 FastPACECF,model,train_nct,outliers,
                 x,donor,target,cap,args.max_plan_calls,
-                seed=args.seed*100003+int(chosen[i])
+                seed=args.seed*100003+int(chosen[i]),
+                train_mean=mu, train_scale=sd
             )
             used=int(calls["examples"])-before
             if used!=measured["online_model_evaluations"] or used>cap:
@@ -260,6 +267,11 @@ def run(args):
                 float(np.median([r["modified_fraction"] for r in group
                                  if r["modified_fraction"] is not None]))
                 if any(r["modified_fraction"] is not None for r in group) else None),
+            "median_gravity_ratio_valid_only":(
+                float(np.median([r["gravity_residual_roughness_ratio"] for r in group
+                                 if r["gravity_residual_roughness_ratio"] is not None]))
+                if any(r["gravity_residual_roughness_ratio"] is not None
+                       for r in group) else None),
             "confirmed_within_20pct":sum(
                 r["target_measured"] and r["modified_fraction"] <= .20 for r in group),
             "confirmed_within_35pct":sum(
