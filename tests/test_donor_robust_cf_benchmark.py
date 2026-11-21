@@ -15,6 +15,10 @@ def row(subject, method, certified, direct, calls=8, minimal=False):
         "online_model_calls": calls,
         "n_logical_regions": 2 if certified else None,
         "gravity_residual_roughness_ratio": 1.0 if certified else None,
+        "withheld_n_checked": 5 if certified else 0,
+        "withheld_n_flipped": 5 if certified else 0,
+        "withheld_flip_fraction": 1.0 if certified else None,
+        "withheld_all_flipped": int(certified),
     }
 
 
@@ -28,6 +32,8 @@ def test_subject_macro_is_not_window_weighted():
     assert s["abstentions"] == 1
     assert s["subject_macro_certified"] == pytest.approx(.5)
     assert s["locally_minimal_and_three_donors"] == 9
+    assert s["n_certified_surviving_all_unseen_training_donors"] == 9
+    assert s["mean_withheld_flip_fraction_given_certified"] == 1.0
 
 
 def test_zero_certificates_are_explicit_abstentions():
@@ -35,6 +41,7 @@ def test_zero_certificates_are_explicit_abstentions():
     assert s["certified_three_donors"] == 0
     assert s["single_donor_flips"] == 1
     assert s["mean_regions_if_certified"] is None
+    assert s["mean_withheld_flip_fraction_given_certified"] is None
     assert s["median_gravity_ratio_if_certified"] is None
     assert s["subject_macro_calls"] == 13
 
