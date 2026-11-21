@@ -58,3 +58,25 @@ def test_gravity_residual_proxy_detects_inconsistent_single_channel_splice():
     assert gravity_residual_roughness(x, mean, sigma) == 0
     assert gravity_residual_roughness(paired, mean, sigma) == 0
     assert gravity_residual_roughness(independent, mean, sigma) > 0
+
+
+def test_gravity_preserving_component_in_original_units():
+    mu=np.array([.2,.3,.4,0.,0.,0.,.5,.6,.7]).reshape(1,1,9)
+    sd=np.array([2.,2.5,3.,1.,1.,1.,.4,.5,.6]).reshape(1,1,9)
+    coupled=uci_har_coupled_groups(COMP,gravity_preserving=True,mean=mu,scale=sd)
+    rng=np.random.default_rng(7)
+    x=rng.normal(size=(8,9))
+    donor=rng.normal(size=(8,9))
+    edited=splice(x,donor,coupled,[0,3],taper=2)
+    raw=lambda a:a*sd.reshape(-1)+mu.reshape(-1)
+    before=raw(x)[:,6:9]-raw(x)[:,:3]
+    after=raw(edited)[:,6:9]-raw(edited)[:,:3]
+    np.testing.assert_allclose(before,after,atol=1e-12)
+    assert not np.array_equal(edited[:,0:3],x[:,0:3])
+    assert not np.array_equal(edited[:,3:6],x[:,3:6])
+    with pytest.raises(ValueError):
+        uci_har_coupled_groups(COMP,gravity_preserving=True)
+    with pytest.raises(ValueError):
+        uci_har_coupled_groups(COMP,gravity_preserving=True,
+                               mean=np.full((1,1,9), np.nan),
+                               scale=sd)
