@@ -25,6 +25,7 @@ from beaconxai.contrastive import make_components, contrastive_prior
 from beaconxai.datasets import apply_standardizer, load_npz_dataset
 from beaconxai.native_cf_budget import QueryBudgetExceeded
 from beaconxai.native_fastpace_meter import MeteredFastPACEModel, FastPACEOutlier
+from beaconxai.cf_physical_projection import project_uci_har_preserve_gravity
 from beaconxai.real_donor import fit_real_donor_bank, nearest_context_index
 from beaconxai.subject_sampling import balanced_subject_sample
 from scripts.run_clean_calibrated_staged_budget import fit_predictor
@@ -86,6 +87,10 @@ def run_fastpace(native_class, model_func, train_nct, outliers,
     rejected_batch=None
     completed_steps=None
     mask_fraction=None
+    planner_evaluations=None
+    projected_target=None
+    projected_fraction=None
+    projected_calls=0
     try:
         explainer=instantiate_fastpace(
             native_class,model,outliers,train_nct,
@@ -104,6 +109,19 @@ def run_fastpace(native_class, model_func, train_nct, outliers,
             status="target_measured"
         else:
             status="unconfirmed_result"
+        planner_evaluations=model.evaluations
+        if result is not None and model.max_evaluations-model.evaluations>=1:
+            physically_projected=project_uci_har_preserve_gravity(
+                x,result,train_mean,train_scale
+            )
+            score=model.predict(
+                np.ascontiguousarray(physically_projected.T)[None]
+            )
+            projected_calls=1
+            projected_target=int(np.argmax(score[0])==target)
+            projected_fraction=float(
+                np.mean(np.abs(physically_projected-x)>1e-8)
+            )
     except QueryBudgetExceeded as e:
         status="hard_Q_exceeded"
         error=str(e)
@@ -115,6 +133,10 @@ def run_fastpace(native_class, model_func, train_nct, outliers,
         "status":status, "exception":error,
         "Q_max":cap,"planning_call_cap":plan_calls,
         "online_model_evaluations":model.evaluations,
+        "planner_only_evaluations":planner_evaluations,
+        "posthoc_physical_audit_queries":projected_calls,
+        "posthoc_physical_target_flip":projected_target,
+        "posthoc_projected_fraction":projected_fraction,
         "model_batches":model.batches,
         "largest_model_batch":model.largest_batch,
         "rejected_batch":rejected_batch,
@@ -263,6 +285,15 @@ def run(args):
                 float(np.median([r["completed_episode_steps"] for r in group
                                  if r["completed_episode_steps"] is not None]))
                 if any(r["completed_episode_steps"] is not None for r in group) else None),
+            "mean_native_planner_evaluations":(
+                float(np.mean([r["planner_only_evaluations"] for r in group
+                                 if r["planner_only_evaluations"] is not None]))
+                if any(r["planner_only_evaluations"] is not None
+                       for r in group) else None),
+            "successful_posthoc_physical_projection":sum(
+                r["posthoc_physical_target_flip"] or 0 for r in group),
+            "attempted_posthoc_physical_projection":sum(
+                r["posthoc_physical_audit_queries"] for r in group),
             "median_edited_fraction_valid_only":(
                 float(np.median([r["modified_fraction"] for r in group
                                  if r["modified_fraction"] is not None]))
@@ -302,6 +333,9 @@ def run(args):
         "cached_original_window_calls":len(test),
         "all_model_evaluations_including_offline":calls["examples"],
         "CPU_execution":True,
+        "posthoc_physical_audit_is_additional_and_in_Q":True,
+        "posthoc_projection_is_not_part_of_upstream_FastPACE":True,
+        "physical_projection_method":"raw-unit least-squares projection preserving total_acc-body_acc",
         "native_RNG_seeded_for_reproducibility":True,
         "limits":[
             "Upstream planner is not adapted for Q8/Q16; oversize native batches are rejected atomically",
