@@ -81,7 +81,8 @@ class CountedCFModel:
             )
         return scores
 
-    def verified_result(self, proposed: np.ndarray, target: int) -> QueriedCandidate | None:
+    def verified_result(self, proposed: np.ndarray, target: int,
+                        source: np.ndarray | None = None) -> QueriedCandidate | None:
         """Select smallest actually evaluated, target-valid proposed candidate.
 
         No additional uncounted black-box call is allowed. If an upstream
@@ -100,7 +101,12 @@ class CountedCFModel:
         eligible = [q for q in self.queried
                     if q.prediction == target and
                     any(np.array_equal(q.x, candidate) for candidate in a)]
-        return min(eligible, key=lambda q: np.linalg.norm(q.x-a[0])) if eligible else None
+        if not eligible:
+            return None
+        center = np.asarray(source, dtype=float) if source is not None else a[0]
+        if center.shape != self._shape:
+            raise ValueError("source must match [T,C]")
+        return min(eligible, key=lambda q: float(np.linalg.norm(q.x-center)))
 
 
 class TrainingGaussianOutlier:
