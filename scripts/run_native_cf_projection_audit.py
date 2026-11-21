@@ -26,6 +26,7 @@ sys.path.insert(0,str(ROOT))
 
 from beaconxai.cf_path_search import search_counterfactual_path
 from beaconxai.cf_physical_projection import project_uci_har_preserve_gravity
+from beaconxai.cf_budgeted_sparse_refine import refine_verified_cf_sparse
 from beaconxai.contrastive import make_components, contrastive_prior
 from beaconxai.datasets import apply_standardizer, load_npz_dataset
 from beaconxai.native_cf_budget import TrainingGaussianOutlier
@@ -148,6 +149,27 @@ def run(args):
                 raise AssertionError("in-loop native model query budget mismatch")
             actual_online+=inloop_calls
 
+            refined=None
+            refine_calls=0
+            refine_cap=None
+            refine_status="inloop_not_verified"
+            if inloop is not None:
+                refine_before=int(calls["examples"])
+                refined_result=refine_verified_cf_sparse(
+                    x,inloop,mu,sd,predict,target_class=target,
+                    budget_remaining=q-inloop_calls,
+                    fraction_caps=(.2,.35,.5,.65),bins=12,
+                )
+                refined=refined_result.x
+                refine_calls=refined_result.model_evaluations
+                refine_cap=refined_result.accepted_fraction_cap
+                refine_status=refined_result.status
+                if int(calls["examples"])-refine_before!=refine_calls:
+                    raise AssertionError("sparse refinement model calls do not match")
+                if inloop_calls+refine_calls>q:
+                    raise AssertionError("sparse refinement exceeds Q")
+                actual_online+=refine_calls
+
             beacon_before=int(calls["examples"])
             b=search_counterfactual_path(
                 x,base,donor,linked,ranking,predict,target_class=target,
@@ -163,6 +185,7 @@ def run(args):
                 ("native_original",native,native_valid,status,native_calls),
                 ("native_projected",projected,projected_valid,projected_status,native_calls+extra),
                 ("native_inloop_projected",inloop,bool(inloop is not None),inloop_status,inloop_calls),
+                ("native_inloop_sparse_refined",refined,bool(refined is not None),refine_status,inloop_calls+refine_calls),
                 ("beacon_gravity",beacon,bool(b.is_valid),b.status,actual_beacon),
             ]
             for name,attempt,valid,stage,cost in values:
@@ -185,20 +208,28 @@ def run(args):
                     "verified":int(valid),"status":stage,
                     "online_calls_if_run_alone":cost,
                     "native_queries_before_projection":(
-                        inloop_calls if name=="native_inloop_projected" else native_calls),
-                    "projection_query_used":extra if name=="native_projected" else 0,
+                        inloop_calls if name in ("native_inloop_projected","native_inloop_sparse_refined")
+                        else native_calls),
+                    "projection_query_used":(
+                        extra if name=="native_projected"
+                        else refine_calls if name=="native_inloop_sparse_refined" else 0),
+                    "refinement_accepted_cap":(
+                        refine_cap if name=="native_inloop_sparse_refined" else None),
                     "relative_l2":distance,
                     "edited_fraction":edited,
                     "gravity_ratio":ratio,
                     "source_prediction_correct_offline":int(source==int(yte[selected[i]])),
                     "native_upstream_error":(
-                        inloop_error if name=="native_inloop_projected"
+                        inloop_error if name in ("native_inloop_projected","native_inloop_sparse_refined")
                         else error if name.startswith("native_") else ""),
                     "native_population":pop if name.startswith("native_") else None,
                     "same_original_native_output_projected":(
                         name in ("native_original","native_projected")),
                     "projection_in_model_and_outlier_objective":(
-                        name=="native_inloop_projected"),
+                        name in ("native_inloop_projected","native_inloop_sparse_refined")),
+                    "verified_sparse_refinement":(
+                        name=="native_inloop_sparse_refined"
+                        and refine_status=="verified_sparse"),
                 })
     if int(calls["examples"])!=len(test)+actual_online:
         raise AssertionError("shared experiment actual calls not accounted")
@@ -216,6 +247,12 @@ def run(args):
         "native_inloop_projection_replaces_model_and_outlier_inputs":True,
         "native_inloop_variant_is_not_original_multisubspace":True,
         "native_inloop_uses_same_initial_random_seed_as_original":True,
+        "sequential_sparse_refinement":(
+            "After verified inloop CF test group-sparse caps .20,.35,.50,.65 "
+            "in ascending order with all tests charged to remaining Q; "
+            "fallback to already verified inloop signal if none succeeds"
+        ),
+        "sparse_method_is_not_hard_support_limited_if_fallback":True,
         "projection_formula_raw_units":"b'=(b_native+t_native-(t_source-b_source))/2; t'=b'+(t_source-b_source)",
         "projection_minimizes_raw_l2_to_native_under_residual_constraint":True,
         "physical_validity_beyond_single_invariant_unproven":True,
@@ -231,6 +268,7 @@ def run(args):
         "total_model_evaluations":calls["examples"],
         "native_projection_counts_share_source_prefix":True,
         "inloop_native_search_has_its_own_counted_evaluations":True,
+        "sparse_refinement_shares_verified_inloop_search_prefix":True,
         "no_donor_robustness_claim":True,
     }
     (output/"manifest.json").write_text(
