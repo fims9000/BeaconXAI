@@ -1,0 +1,75 @@
+name: BEACON UWave pairwise adaptive Q8 Q16 holdout
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uea_uwave_pairwise_adaptive.yml'
+      - 'scripts/preprocess_uea_uwave.py'
+      - 'scripts/run_uea_uwave_interactions.py'
+      - 'beaconxai/learned_interactions.py'
+      - 'tests/test_uea_uwave_interactions.py'
+      - 'tests/test_learned_interactions.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  PYTHONHASHSEED: '0'
+
+jobs:
+  preregistered-uwave:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install project and pinned archive reader
+        run: |
+          python -m pip install -e . pytest matplotlib aeon==1.5.0
+      - name: Assert TRAIN-calibration separation, Q invariants and interactions
+        run: |
+          python -m pytest -q \
+            tests/test_learned_interactions.py \
+            tests/test_uea_uwave_interactions.py \
+            tests/test_donor_robust_cf.py \
+            tests/test_uea_natops_sparse_q16.py
+      - name: Download untouched UEA UWaveGestureLibrary official split
+        run: |
+          python -u scripts/preprocess_uea_uwave.py \
+            --out data/uea_uwave_official.npz
+      - name: Execute frozen TRAIN-surrogate and official TEST comparison
+        run: |
+          python -u scripts/run_uea_uwave_interactions.py \
+            --npz-path data/uea_uwave_official.npz \
+            --out-dir outputs_composite/uwave_pairwise_adaptive \
+            --seed 57 --trees 120 --donors 10
+      - name: Write complete provenance
+        if: always()
+        run: |
+          mkdir -p outputs_composite/uwave_pairwise_adaptive
+          {
+            git rev-parse HEAD
+            git rev-parse 96bde2caae0f442daf4599b035361e8028733c50
+            python --version
+            python -m pip freeze | grep -E 'aeon|numpy|scikit-learn|scipy|pandas|pytest'
+            if test -f data/uea_uwave_official.npz; then sha256sum data/uea_uwave_official.npz; fi
+          } > outputs_composite/uwave_pairwise_adaptive/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: uwave-trained-interaction-Q8-Q16
+          path: outputs_composite/uwave_pairwise_adaptive/
+          retention-days: 90
+          if-no-files-found: warn
