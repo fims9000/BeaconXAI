@@ -1,4 +1,4 @@
-name: BEACON authentic FastPACE HCEM full planning cost profile
+name: BEACON authentic FastPACE HCEM full planning cost evaluation
 
 on:
   push:
@@ -49,7 +49,7 @@ jobs:
         run: |
           python scripts/preprocess_uci_har_for_q36.py \
             --root data/uci_har --out data/uci_har_official_subjects.npz
-      - name: Profile 50-plan-step native FastPACE on a predeclared test subject
+      - name: Evaluate native FastPACE with full 50-plan-step limit on nine subject representatives
         run: |
           python -u scripts/run_native_fastpace_query_probe.py \
             --npz-path data/uci_har_official_subjects.npz \
@@ -57,7 +57,7 @@ jobs:
             --out-dir outputs_composite/fastpace_fullplan_${{ matrix.model }} \
             --model ${{ matrix.model }} --query-caps 16,20000 \
             --max-plan-calls 50 --max-test 9 \
-            --profile-subject 2 --seed 57 --beacon-reference
+            --seed 57 --beacon-reference
       - name: Store exact versions and evidence
         if: always()
         run: |
