@@ -111,6 +111,8 @@ def run(args):
     qs=sorted(set(int(v) for v in args.budgets.split(",")))
     if not qs or not set(qs).issubset({8,16}) or not 1<=args.max_test<=40:
         raise ValueError("invalid Q8/Q16 or test-window limit")
+    if not 1<=args.max_changed<=args.max_extended<=60:
+        raise ValueError("invalid standard or extended component count")
     mu,sd,profiles,model,calls=fit_predictor(
         train_raw,ytrain,args.model,args.seed,args.trees)
     train=apply_standardizer(train_raw,mu,sd)
@@ -122,6 +124,8 @@ def run(args):
         train,ytrain,components,max_donors=args.donors,seed=args.seed+10
     )
     rows=[]
+    prefix_diagnostics=[]
+    offline_prefix_queries=0
     for i,x in enumerate(test):
         base=baseline[i]
         source=int(np.argmax(base))
@@ -137,16 +141,21 @@ def run(args):
         ).permutation(len(components)).astype(int).tolist()
         for q in qs:
             for method in ("beacon_directed","beacon_uniform",
+                           "beacon_directed_extended","beacon_uniform_extended",
                            "donor_line","native_multisubspace"):
                 before=int(calls["examples"])
                 edit=None
                 status="not_found"
                 if method.startswith("beacon_"):
-                    order=directed if method=="beacon_directed" else uniform
+                    order=directed if method.startswith("beacon_directed") else uniform
+                    max_groups=(
+                        args.max_extended if method.endswith("_extended")
+                        else args.max_changed
+                    )
                     result=search_counterfactual_path(
                         x,base,donor,components,order,model,
                         target_class=target,budget=q,
-                        max_changed_components=min(args.max_changed, len(components)),
+                        max_changed_components=min(max_groups, len(components)),
                         seed_singletons=3,taper=args.taper,
                     )
                     if result.is_valid:
@@ -191,14 +200,44 @@ def run(args):
                     "relative_l2":rel,
                     "locally_minimal_verified":local_minimality,
                 })
+        if args.offline_prefix:
+            # OFFLINE FULL-REFERENCE diagnostic, NEVER exposed to search
+            # decisions, model selection, or held-out labels.
+            for name,order in (("directed",directed),("uniform",uniform)):
+                candidates=np.stack([
+                    splice(x,donor,components,order[:n],taper=args.taper)
+                    for n in range(1,len(order)+1)
+                ])
+                start=int(calls["examples"])
+                outputs=model(candidates)
+                offline_prefix_queries+=len(order)
+                if int(calls["examples"])-start!=len(order):
+                    raise AssertionError("offline full prefix queries undercounted")
+                successes=np.flatnonzero(np.argmax(outputs,axis=1)==target)
+                first=int(successes[0])+1 if len(successes) else None
+                selected=candidates[first-1] if first is not None else None
+                prefix_diagnostics.append({
+                    "sample":i,"order":name,"target_pred":target,
+                    "n_components":len(order),"first_flip_prefix_size":first,
+                    "first_flip_modified_fraction":(
+                        float(np.mean(np.abs(selected-x)>1e-8))
+                        if selected is not None else None
+                    ),
+                    "full_prefix_target_flip":int(
+                        int(np.argmax(outputs[-1]))==target),
+                    "offline_queries":len(order),
+                    "offline_only":True,
+                })
     online=sum(r["additional_calls"] for r in rows)
-    if calls["examples"]!=len(test)+online:
+    if calls["examples"]!=len(test)+online+offline_prefix_queries:
         raise AssertionError("some model calls were not counted")
     output=Path(args.out_dir)
     output.mkdir(parents=True,exist_ok=True)
     table=summarize(rows)
     write_csv(output/"per_sample.csv",rows)
     write_csv(output/"summary.csv",table)
+    if args.offline_prefix:
+        write_csv(output/"offline_prefix_reachability.csv",prefix_diagnostics)
     manifest={
         "dataset":"UEA BasicMotions","source":"aeon.datasets.load_basic_motions",
         "dataset_protocol":protocol,
@@ -213,10 +252,16 @@ def run(args):
         "native_baseline_budget_adapted_not_original_settings":True,
         "same_frozen_classifier_source_target_and_donor_per_window":True,
         "methods_have_different_intervention_operators":True,
+        "component_fraction_per_group":1/len(components),
+        "beacon_standard_max_groups":args.max_changed,
+        "beacon_extended_max_groups":args.max_extended,
+        "offline_prefix_oracle_only_descriptive":args.offline_prefix,
+        "offline_prefix_oracle_model_evaluations":offline_prefix_queries,
+        "offline_prefix_does_not_prove_global_minimality":True,
         "max_additional_blackbox_Q":qs,
         "cached_source_model_evaluations":len(test),
         "online_blackbox_model_evaluations":online,
-        "total_blackbox_model_evaluations":calls["examples"],
+        "total_model_evaluations_including_offline_reference":calls["examples"],
         "line_search_operator_changes_whole_signal":True,
         "test_labels_never_used_in_search":True,
         "limitations":[
@@ -227,6 +272,8 @@ def run(args):
             "Native MultiSubSpaCE settings adapted to Q8 and Q16",
             "Wilson intervals ignore multiple comparisons and adaptation history",
             "Target-class flips do not prove causal or sufficient explanations",
+            "Extended path and prefix-reachability analyses were motivated by exploratory test results",
+            "Offline full-prefix reachability cannot be counted as Q8/Q16 online performance",
         ],
     }
     (output/"manifest.json").write_text(
@@ -247,6 +294,8 @@ def main():
     p.add_argument("--budgets",default="8,16")
     p.add_argument("--max-test",type=int,default=40)
     p.add_argument("--max-changed",type=int,default=8)
+    p.add_argument("--max-extended",type=int,default=16)
+    p.add_argument("--offline-prefix",action="store_true")
     p.add_argument("--donors",type=int,default=8)
     p.add_argument("--taper",type=int,default=2)
     p.add_argument("--trees",type=int,default=120)
