@@ -12,7 +12,7 @@ def make_source(tmp_path, train_subjects=(1,1,3,3,5,5,7,7), test_subjects=(2,4))
         x_train=np.arange(n*128*9).reshape(n,128,9).astype("float32"),
         y_train=np.tile([0,1], n//2),
         subject_train=np.asarray(train_subjects),
-        x_test=np.full((len(test_subjects),128,9),999.),
+        x_test=np.full((len(test_subjects),128,9),-99999.),
         y_test=np.full(len(test_subjects),5),
         subject_test=np.asarray(test_subjects),
     )
@@ -30,7 +30,7 @@ def test_replicate_heldout_only_from_official_training(tmp_path):
         assert len(data["x_train"])==4 and len(data["x_test"])==4
         assert set(data["subject_train"])=={1,7}
         assert set(data["subject_test"])=={3,5}
-        assert not np.any(data["x_train"]==999)
+        assert not np.any(data["x_train"]==-99999)
         assert not np.any(data["x_test"]==999)
         assert "TRAIN" in str(data["dataset_protocol"])
 
