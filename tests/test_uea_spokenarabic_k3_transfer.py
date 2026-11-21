@@ -150,8 +150,8 @@ def test_variable_length_normalized_interpolation_preserves_endpoints_and_length
     assert lengths.shape==(2,13)
     assert int(lengths[0,0])==31 and int(lengths[0,12])==43
     assert np.all(lengths[1]==93)
-    np.testing.assert_allclose(x[:,:,0],np.arange(13)[None],rtol=0,atol=1e-6)
-    np.testing.assert_allclose(x[:,:,-1],(np.arange(13)+1)[None],rtol=0,atol=1e-6)
+    np.testing.assert_allclose(x[:,:,0],np.broadcast_to(np.arange(13),(2,13)),rtol=0,atol=1e-6)
+    np.testing.assert_allclose(x[:,:,-1],np.broadcast_to(np.arange(13)+1,(2,13)),rtol=0,atol=1e-6)
     np.testing.assert_allclose(x[0],x[1],rtol=0,atol=2e-6)
 
 
