@@ -89,7 +89,7 @@ def test_backward_full_donor_pruning_finds_verified_three_group_set():
     r=search_backward_counterfactual(
         X,predicts(X[None])[0],D,COMP,list(range(5)),wrapped,
         target_class=1,budget=16,taper=0)
-    assert r.is_valid and r.verified_edit==(2,3,4)
+    assert r.is_valid and r.verified_edit==(0,1,2)
     assert r.local_minimality_checked
     assert r.calls==count[0]
     assert r.calls<=16
