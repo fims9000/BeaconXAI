@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -165,6 +166,10 @@ def summarize(records):
                 r["minimal_on_both"] for r in success),
             "mean_online_model_queries":float(np.mean(
                 [r["model_queries"] for r in subset])),
+            "median_search_wall_seconds":float(np.median(
+                [r["search_wall_seconds"] for r in subset])),
+            "mean_search_wall_seconds":float(np.mean(
+                [r["search_wall_seconds"] for r in subset])),
             "median_fraction_d1":(
                 float(np.median([r["fraction_d1"] for r in success]))
                 if success else None),
@@ -229,10 +234,13 @@ def run(args):
             missing+=1
         chosen=eligible[:2]
         selected_donors=tuple(pool[j] for j in chosen)
+        t_gain=time.perf_counter()
         gains=(train_profile_donor_gains(
             x,selected_donors,comps,profiles,source,target,taper=TAPER)
             if len(chosen)==2 else None)
+        gain_seconds=time.perf_counter()-t_gain
         for method in METHODS:
+            start_search=time.perf_counter()
             if len(chosen)<2:
                 result=no_donor()
             else:
@@ -240,10 +248,13 @@ def run(args):
                     x,base[i],selected_donors,comps,rank,
                     model,counter,method,gains,
                 )
+            search_seconds=time.perf_counter()-start_search
             online+=result["model_queries"]
             records.append({
                 "sample":i,"method":method,
                 "source_pred":source,"target_pred":target,
+                "search_wall_seconds":search_seconds,
+                "train_profile_prior_wall_seconds":gain_seconds,
                 "available_train_donors":len(eligible),
                 "train_donor_1":(
                     int(bank.selected_train_indices[target][chosen[0]])
@@ -295,6 +306,9 @@ def run(args):
         "test_labels_used_only_for_final_accuracy":True,
         "no_physical_plausibility_or_causality_claim":True,
         "new_sparse_method_returns_only_compact_two_donor_certificates":True,
+        "profiling_added_after_primary_evaluation":True,
+        "timing_is_wall_on_GitHub_CPU_not_MCU_energy":True,
+        "train_profile_prior_timing_excluded_from_search_wall":True,
         "sparse_prior_uses_TRAIN_profiles_only":True,
         "primary":primary,
         "summary":comparison,
