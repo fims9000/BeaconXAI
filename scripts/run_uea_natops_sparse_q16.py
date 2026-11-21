@@ -185,7 +185,7 @@ def run(args):
         labels=z["labels"].tolist()
         protocol=str(z["dataset_protocol"])
     if (raw_train.shape!=(180,51,24) or raw_test.shape!=(180,51,24)
-        or len(set(ytrain))!=4 or len(set(ytest))!=4
+        or len(set(ytrain))!=6 or len(set(ytest))!=6
         or "UEA NATOPS official TRAIN 180 / TEST 180" not in protocol):
         raise ValueError("wrong official NATOPS split or geometry")
     mu,sd,profiles,model,counter=fit_predictor(
