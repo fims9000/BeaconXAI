@@ -245,7 +245,7 @@ def paired_primary(rows):
     lookup={(r["sample"],r["method"],r["Q"]):r for r in rows}
     table={"both":0,"adaptive_only":0,"static_only":0,"neither":0}
     for i in range(320):
-        a=int(lookup[(i,"pairs_adaptive",16)]["strict_joint"])
+        a=int(lookup[(i,"additive_adaptive",16)]["strict_joint"])
         b=int(lookup[(i,"static_sparse",16)]["strict_joint"])
         key="both" if a and b else "adaptive_only" if a else "static_only" if b else "neither"
         table[key]+=1
@@ -412,6 +412,7 @@ def run(args):
     registry={
         "protocol":"artifacts/beacon_pendigits_pairwise_adaptive_preregistered_2026-11-22.md",
         "dataset":"UEA PenDigits official aeon 1.5.0",
+        "primary_comparison":"additive_adaptive vs static_sparse at Q16",
         "data_sha256":hashlib.sha256(data.read_bytes()).hexdigest(),
         "model_sha256":counter["fitted_model_sha256"],
         "scaler_sha256":counter["training_standardizer_sha256"],
