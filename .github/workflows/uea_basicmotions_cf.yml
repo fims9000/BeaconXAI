@@ -62,7 +62,8 @@ jobs:
             --upstream third_party/FastPACE \
             --out-dir outputs_composite/uea_basicmotions_${{ matrix.model }} \
             --model ${{ matrix.model }} --budgets 8,16 \
-            --max-test 40 --seed 57 --donors 8
+            --max-test 40 --seed 57 --donors 8 \
+            --max-changed 8 --max-extended 16 --offline-prefix
       - name: Preserve model, data and dependency provenance
         if: always()
         run: |
