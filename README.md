@@ -16,6 +16,7 @@ The historical `v12-final` tag and the two original studies above are unchanged.
 - UWave ExtraTrees: adaptive pair model **160/320 vs 141/320** static (p=0.0183), but **classifier accuracy only 62.2%**; additive adaptive is higher at 175/320.
 - PenDigits raw MLP: additive adaptive **257/320 vs 252/320**, p=0.125; **classifier accuracy 94.77%**, so improvement is **not confirmed** on this model.
 - D3/D4 transfer of previously certified masks is poor for both learned variants; **do not describe certification on D1+D2 as invariance across donors**.
+- SpokenArabicDigits ExtraTrees, 92.72% accuracy, Q16: K3 (adding one distant donor) gave **80/320** fresh D4+D5 transfers versus **91/320** under K2 (paired p=0.0433, negative result). This required a **documented pre-inference interpolation amendment** for aeon's variable-length MFCC inputs; see [results](artifacts/beacon_spokenarabic_k3_transfer_results_2026-11-22.md).
 
 All methods count one **evaluated input** to the black-box model as one online query (Q=8 or 16 **total across selected donors**), while offline TRAIN-only calibration and independent posthoc donor audits are separately reported in the experiment manifests. Validity means a directly measured target-class switch on the specified edited signal; it does not establish causal attribution, physical plausibility, global minimality or cross-subject transport.
 
