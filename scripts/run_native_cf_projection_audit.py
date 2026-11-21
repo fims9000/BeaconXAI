@@ -86,6 +86,8 @@ def run(args):
     with np.load(data) as z:
         strn=np.asarray(z["subject_train"],dtype=int)
         ste=np.asarray(z["subject_test"],dtype=int)
+        protocol=(str(z["dataset_protocol"]) if "dataset_protocol" in z.files
+                  else "UCI HAR official subject-disjoint test split")
     if set(strn)&set(ste) or xtr.shape[1:]!=(128,9):
         raise ValueError("subject leakage or non-UCI input")
     mu,sd,profiles,predict,calls=fit_predictor(
@@ -198,6 +200,9 @@ def run(args):
         "projection_minimizes_raw_l2_to_native_under_residual_constraint":True,
         "physical_validity_beyond_single_invariant_unproven":True,
         "same_classifier_donor_target_x_across_methods":True,
+        "dataset_protocol":protocol,
+        "training_subjects":sorted(map(int,np.unique(strn))),
+        "evaluation_subjects":sorted(map(int,np.unique(ste[selected]))),
         "source_model_SHA":calls["fitted_model_sha256"],
         "npz_SHA":hashlib.sha256(data.read_bytes()).hexdigest(),
         "Q_additional_includes_projected_verification":q_values,
