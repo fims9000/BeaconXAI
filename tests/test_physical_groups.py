@@ -44,3 +44,17 @@ def test_priority_and_overlapping_regions_are_rejected():
         splice(x, donor, [groups[0], groups[0]], [0,1])
     with pytest.raises(ValueError):
         uci_har_coupled_groups(COMP[:-1])
+
+
+def test_gravity_residual_proxy_detects_inconsistent_single_channel_splice():
+    from scripts.run_verified_counterfactual_benchmark import gravity_residual_roughness
+    x = np.zeros((8, 9))
+    d = np.ones_like(x)
+    coupled = uci_har_coupled_groups(COMP)
+    paired = splice(x, d, coupled, [0], taper=0)
+    independent = splice(x, d, COMP, [4], taper=0)
+    mean = np.zeros((1, 1, 9))
+    sigma = np.ones((1, 1, 9))
+    assert gravity_residual_roughness(x, mean, sigma) == 0
+    assert gravity_residual_roughness(paired, mean, sigma) == 0
+    assert gravity_residual_roughness(independent, mean, sigma) > 0
