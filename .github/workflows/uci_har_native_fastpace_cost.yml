@@ -62,7 +62,7 @@ jobs:
             --upstream third_party/FastPACE \
             --out-dir outputs_composite/fastpace_metered_${{ matrix.model }} \
             --model ${{ matrix.model }} --query-caps 16,4096 \
-            --max-plan-calls 1 --max-test 3 --seed 57 \
+            --max-plan-calls 1 --max-test 9 --seed 57 \
             --beacon-reference
       - name: Preserve provenance
         if: always()
