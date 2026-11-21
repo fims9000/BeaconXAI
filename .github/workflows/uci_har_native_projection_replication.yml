@@ -9,6 +9,10 @@ on:
       - 'scripts/run_native_cf_projection_audit.py'
       - 'scripts/resplit_uci_har_train_subjects.py'
       - 'beaconxai/cf_physical_projection.py'
+      - 'beaconxai/cf_group_sparse.py'
+      - 'beaconxai/cf_budgeted_sparse_refine.py'
+      - 'tests/test_cf_group_sparse.py'
+      - 'tests/test_cf_budgeted_sparse_refine.py'
       - 'beaconxai/native_cf_projection.py'
       - 'tests/test_native_cf_projection.py'
   workflow_dispatch:
@@ -57,6 +61,7 @@ jobs:
           python -m pip install -e . pytest matplotlib 'numpy<2'
           python -m pytest -q tests/test_cf_physical_projection.py \
             tests/test_native_cf_projection.py tests/test_native_cf_budget.py \
+            tests/test_cf_group_sparse.py tests/test_cf_budgeted_sparse_refine.py \
             tests/test_resplit_uci_har_train_subjects.py
       - name: Checkout exact authentic upstream
         run: |
