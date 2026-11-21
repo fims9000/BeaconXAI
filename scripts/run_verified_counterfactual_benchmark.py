@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Held-out UCI HAR counterfactual search: valid target flips, not Q36 top-k.
+"""Held-out time-series counterfactual search: valid target flips, not Q36 top-k.
 
 For each original window: frozen classifier predicts class A, its runner-up B
 is target. A TRAIN-only B donor supplies real segments. Compare single/pair search to cumulative multi-component edit paths under
@@ -31,7 +31,7 @@ from scripts.run_q16_matched_ablation import write_csv
 
 def run(args):
     path = Path(args.npz_path)
-    raw_train, y_train, raw_test, _ = load_npz_dataset(path)
+    raw_train, y_train, raw_test, y_test = load_npz_dataset(path)
     with np.load(path) as z:
         train_ids = np.asarray(z["subject_train"], dtype=int)
         test_ids = np.asarray(z["subject_test"], dtype=int)
@@ -131,6 +131,28 @@ def run(args):
                     "selected_donor_train_index":
                         int(bank.selected_train_indices[b][nearest]),
                 })
+        # Diagnostic ONLY, after all budgeted explanations of this sample:
+        # is the TRAIN donor itself classified as B, and does replacing all
+        # components still produce B after tapering? Neither answer influences
+        # donor selection, candidate selection or the Q8/Q16 decisions.
+        check = model(np.stack([
+            donor, splice(x, donor, comps, tuple(range(len(comps))),
+                          taper=args.taper),
+        ]))
+        donor_target_valid = int(np.argmax(check[0]) == b)
+        full_tapered_target_valid = int(np.argmax(check[1]) == b)
+        for r in rows:
+            if r["sample"] == i:
+                r["offline_donor_predicted_target"] = donor_target_valid
+                r["offline_full_replacement_target"] = full_tapered_target_valid
+
+    # Held-out activity labels are read here only for retrospective
+    # classification-quality / risk diagnostics; NEVER during search.
+    for row in rows:
+        truth = int(y_test[row["original_window_index"]])
+        row["offline_classification_correct"] = int(row["source"] == truth)
+        row["offline_target_equals_truth"] = int(row["target"] == truth)
+
     summaries = []
     for q in budgets:
         for name in ("contrastive", "uniform", "contrastive_path", "uniform_path"):
@@ -166,6 +188,10 @@ def run(args):
                 "n_robust_on_both_extra_donors": sum(
                     r["verified"] and r["donor_audit_calls"] == args.reserve and
                     r["donor_target_flip_fraction"] == 1.0 for r in group),
+                "n_donor_model_target": sum(r["offline_donor_predicted_target"] for r in group),
+                "n_full_tapered_replacement_target": sum(
+                    r["offline_full_replacement_target"] for r in group),
+                "n_classifier_correct": sum(r["offline_classification_correct"] for r in group),
             })
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -173,7 +199,8 @@ def run(args):
     write_csv(out / "summary.csv", summaries)
     manifest = {
         "npz_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-        "dataset": "UCI HAR, original held-out windows; no synthetic insertion",
+        "dataset": args.dataset,
+        "study_objects": "original held-out windows; no synthetic insertion",
         "train_subjects": sorted(map(int, np.unique(train_ids))),
         "test_subjects": sorted(map(int, np.unique(test_ids))),
         "model": args.model, "classifier_sha256": calls["fitted_model_sha256"],
@@ -187,6 +214,9 @@ def run(args):
         "search_policies": ["singleton_then_pair", "multi_component_path_with_local_pruning"],
         "max_edited_components": {"pair_search": 2, "path_search": 8}, "taper": args.taper,
         "model_evaluations_total_including_initial_baselines": calls["examples"],
+        "offline_feasibility_model_calls": 2 * len(test),
+        "offline_feasibility_excluded_from_online_budget": True,
+        "offline_ground_truth_only_after_search": True,
         "no_test_label_used_in_search": True,
         "paired_reference": "same x, classifier, target and donor for all policies within sample",
         "local_minimality_is_not_global": True,
@@ -195,7 +225,7 @@ def run(args):
             "A spliced real donor fragment does not imply a physically plausible whole series",
             "First verified edit is not a global minimal counterfactual; subset minimality is flagged only when tested",
             "Donor audit is descriptive, not population coverage guarantee",
-            "No model-verified target-class donor feasibility or sensor-physics realism guarantee",
+            "Offline target-donor and full-edit feasibility diagnostics are not used by the search and cost 2 more calls per window",
             "Search may fail because of budget, donor, group limit, candidate restriction or model behavior",
             "No real MCU latency, energy, RAM, or causal attribution measurements",
         ],
@@ -208,6 +238,7 @@ def run(args):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--npz-path", required=True, type=Path)
+    p.add_argument("--dataset", default="UCI_HAR", choices=["UCI_HAR", "PAMAP2"])
     p.add_argument("--out-dir", required=True, type=Path)
     p.add_argument("--model", choices=["raw_mlp", "extratrees"], default="raw_mlp")
     p.add_argument("--budgets", default="8,16")
