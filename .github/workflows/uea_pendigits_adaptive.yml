@@ -1,0 +1,73 @@
+name: BEACON PenDigits raw MLP adaptive Q8 Q16 holdout
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uea_pendigits_adaptive.yml'
+      - 'scripts/preprocess_uea_pendigits.py'
+      - 'scripts/run_uea_pendigits_interactions.py'
+      - 'tests/test_uea_pendigits_interactions.py'
+      - 'beaconxai/learned_interactions.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  PYTHONHASHSEED: '0'
+
+jobs:
+  frozen-pendigits:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install project and aeon 1.5
+        run: |
+          python -m pip install -e . pytest matplotlib aeon==1.5.0
+      - name: Validate PenDigits preregistration and exact model-call counters
+        run: |
+          python -m pytest -q \
+            tests/test_uea_pendigits_interactions.py \
+            tests/test_learned_interactions.py \
+            tests/test_donor_robust_cf.py
+      - name: Download official UEA PenDigits train and test
+        run: |
+          python -u scripts/preprocess_uea_pendigits.py \
+            --out data/uea_pendigits_official.npz
+      - name: Run frozen raw MLP additive versus static Q8/Q16
+        run: |
+          python -u scripts/run_uea_pendigits_interactions.py \
+            --npz-path data/uea_pendigits_official.npz \
+            --out-dir outputs_composite/pendigits_adaptive \
+            --seed 57 --trees 120 --donors 16
+      - name: Store exact model/data/code provenance
+        if: always()
+        run: |
+          mkdir -p outputs_composite/pendigits_adaptive
+          {
+            git rev-parse HEAD
+            git rev-parse 47876dba06b0753413c854d56d8040146aef6e4f
+            python --version
+            python -m pip freeze | grep -E 'aeon|numpy|scikit-learn|scipy|pandas|pytest'
+            if test -f data/uea_pendigits_official.npz; then sha256sum data/uea_pendigits_official.npz; fi
+          } > outputs_composite/pendigits_adaptive/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pendigits-trained-adaptive-Q8-Q16
+          path: outputs_composite/pendigits_adaptive/
+          retention-days: 90
+          if-no-files-found: warn
