@@ -83,6 +83,8 @@ def run_fastpace(native_class, model_func, train_nct, outliers,
     error=""
     result=None
     rejected_batch=None
+    completed_steps=None
+    mask_fraction=None
     try:
         explainer=instantiate_fastpace(
             native_class,model,outliers,train_nct,
@@ -94,6 +96,8 @@ def run_fastpace(native_class, model_func, train_nct, outliers,
             nun_example=donor.T.astype(np.float32)[None]
         )
         candidate=np.asarray(answer["cfs"],dtype=np.float32)
+        completed_steps=int(answer["steps"])+1
+        mask_fraction=float(np.mean(np.asarray(answer["best_mask"])>0))
         if model.was_measured_target(candidate,target):
             result=candidate.T
             status="target_measured"
@@ -115,6 +119,8 @@ def run_fastpace(native_class, model_func, train_nct, outliers,
         "rejected_batch":rejected_batch,
         "first_batches":",".join(map(str,model.batch_sizes[:40])),
         "target_measured":int(result is not None),
+        "completed_episode_steps":completed_steps,
+        "best_mask_fraction":mask_fraction,
         "modified_fraction":(
             float(np.mean(np.abs(result-x)>1e-8))
             if result is not None else None
@@ -246,6 +252,20 @@ def run(args):
                 float(np.mean([r["online_model_evaluations"] for r in group]))
                 if group else None),
             "maximum_native_batch":max((r["largest_model_batch"] for r in group),default=0),
+            "median_completed_episode_steps":(
+                float(np.median([r["completed_episode_steps"] for r in group
+                                 if r["completed_episode_steps"] is not None]))
+                if any(r["completed_episode_steps"] is not None for r in group) else None),
+            "median_edited_fraction_valid_only":(
+                float(np.median([r["modified_fraction"] for r in group
+                                 if r["modified_fraction"] is not None]))
+                if any(r["modified_fraction"] is not None for r in group) else None),
+            "confirmed_within_20pct":sum(
+                r["target_measured"] and r["modified_fraction"] <= .20 for r in group),
+            "confirmed_within_35pct":sum(
+                r["target_measured"] and r["modified_fraction"] <= .35 for r in group),
+            "confirmed_within_50pct":sum(
+                r["target_measured"] and r["modified_fraction"] <= .50 for r in group),
         })
     write_csv(out/"summary.csv",summary)
     manifest={
