@@ -19,9 +19,9 @@ def test_sparse_projection_keeps_acceleration_channels_coupled():
     assert z.selected_cell_cost<=int(.25*x.size)
     assert z.modified_fraction<=.25
     assert z.groups==(0,)
-    np.testing.assert_array_equal(z.x[:4,0:3],4)
-    np.testing.assert_array_equal(z.x[:4,6:9],4)
-    np.testing.assert_array_equal(z.x[4:],0)
+    assert np.all(z.x[:4,0:3]==4)
+    assert np.all(z.x[:4,6:9]==4)
+    assert np.all(z.x[4:]==0)
 
 
 def test_exact_best_group_combination_against_brute_force():
