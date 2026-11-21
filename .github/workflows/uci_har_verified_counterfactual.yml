@@ -1,0 +1,71 @@
+name: Verified contrastive examples UCI HAR Q8 Q16
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uci_har_verified_counterfactual.yml'
+      - 'beaconxai/verified_counterfactual.py'
+      - 'scripts/run_verified_counterfactual_benchmark.py'
+      - 'tests/test_verified_counterfactual.py'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  PYTHONHASHSEED: '0'
+
+jobs:
+  verify-counterfactuals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        model: [raw_mlp, extratrees]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install project and tests
+        run: python -m pip install -e . pytest
+      - name: Verify exact counted calls, interaction and abstention
+        run: python -m pytest -q tests/test_verified_counterfactual.py tests/test_class_counterfactual.py
+      - name: Download original participant-disjoint UCI HAR dataset
+        run: |
+          python scripts/preprocess_uci_har_for_q36.py \
+            --root data/uci_har --out data/uci_har_official_subjects.npz
+      - name: Search targeted counterfactuals on held-out participant windows
+        run: |
+          python -u scripts/run_verified_counterfactual_benchmark.py \
+            --npz-path data/uci_har_official_subjects.npz \
+            --out-dir outputs_composite/verified_counterfactual_${{ matrix.model }} \
+            --model ${{ matrix.model }} --budgets 8,16 --max-test 36 \
+            --donors 8 --reserve 2 --seed 57
+      - name: Preserve provenance
+        if: always()
+        run: |
+          mkdir -p outputs_composite/verified_counterfactual_${{ matrix.model }}
+          {
+            git rev-parse HEAD
+            python --version
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pandas|pytest'
+            if test -f data/uci_har_official_subjects.npz; then sha256sum data/uci_har_official_subjects.npz; fi
+          } > outputs_composite/verified_counterfactual_${{ matrix.model }}/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verified-counterfactual-${{ matrix.model }}
+          path: outputs_composite/verified_counterfactual_${{ matrix.model }}/
+          retention-days: 30
+          if-no-files-found: warn
