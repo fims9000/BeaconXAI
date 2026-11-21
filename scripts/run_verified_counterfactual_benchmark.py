@@ -25,6 +25,17 @@ from beaconxai.verified_counterfactual import (
     find_verified_counterfactual, donor_stability_audit, splice,
 )
 from beaconxai.cf_path_search import search_counterfactual_path
+from beaconxai.physical_groups import uci_har_coupled_groups, coupled_priority
+
+def gravity_residual_roughness(x_normalized, mean, scale):
+    """UCI HAR only: roughness of (total_acc - body_acc) in original units.
+
+    Proxy diagnostic, NOT a physics/realism guarantee.
+    """
+    raw = np.asarray(x_normalized) * np.asarray(scale).reshape(-1) + np.asarray(mean).reshape(-1)
+    residual = raw[:, 6:9] - raw[:, 0:3]
+    return float(np.mean(np.linalg.norm(np.diff(residual, axis=0), axis=1)))
+
 from scripts.run_clean_calibrated_staged_budget import fit_predictor
 from scripts.run_q16_matched_ablation import write_csv
 
@@ -42,6 +53,9 @@ def run(args):
     )
     train = apply_standardizer(raw_train, mu, std)
     comps = make_components(train.shape[1:], 12, "pamap3")
+    if args.coupled_uci_har and args.dataset != "UCI_HAR":
+        raise ValueError("coupled body/total acceleration is UCI HAR only")
+    effective_comps = uci_har_coupled_groups(comps) if args.coupled_uci_har else comps
     bank = fit_real_donor_bank(
         train, y_train, comps, max_donors=args.donors, seed=args.seed + 10
     )
@@ -49,7 +63,7 @@ def run(args):
     test = apply_standardizer(raw_test[selected], mu, std)
     base = model(test)
     budgets = sorted(set(int(b) for b in args.budgets.split(",")))
-    if not budgets or any(b < 2 or b > len(comps) for b in budgets):
+    if not budgets or any(b < 2 or b > len(effective_comps) for b in budgets):
         raise ValueError("invalid budgets")
     rows = []
     for i, x in enumerate(test):
@@ -58,10 +72,12 @@ def run(args):
         b = int(np.argsort(-scores, kind="stable")[1])
         if a not in profiles or b not in bank.donors:
             raise ValueError("predicted class absent from train")
-        rank = np.argsort(-np.abs(contrastive_prior(x, a, b, profiles, comps)),
-                          kind="stable").astype(int).tolist()
+        prior = contrastive_prior(x, a, b, profiles, comps)
+        cheap_rank_scores = (coupled_priority(prior, comps) if args.coupled_uci_har
+                             else np.abs(prior))
+        rank = np.argsort(-cheap_rank_scores, kind="stable").astype(int).tolist()
         rng = np.random.default_rng(args.seed * 100003 + int(selected[i]))
-        uniform = rng.permutation(len(comps)).astype(int).tolist()
+        uniform = rng.permutation(len(effective_comps)).astype(int).tolist()
         nearest = nearest_context_index(x, 0, bank, b, comps)
         donor = bank.donors[b][nearest]
         audit_donors = [bank.donors[b][j] for j in range(len(bank.donors[b]))
@@ -77,7 +93,7 @@ def run(args):
                 before = int(calls["examples"])
                 if use_path:
                     search = search_counterfactual_path(
-                        x, scores, donor, comps, order, model, target_class=b,
+                        x, scores, donor, effective_comps, order, model, target_class=b,
                         budget=q-args.reserve, max_changed_components=8,
                         seed_singletons=min(3, q-args.reserve), taper=args.taper,
                     )
@@ -85,7 +101,7 @@ def run(args):
                     minimal_checked = search.local_minimality_checked
                 else:
                     search = find_verified_counterfactual(
-                        x, scores, donor, comps, order, model, target_class=b,
+                        x, scores, donor, effective_comps, order, model, target_class=b,
                         budget=q-args.reserve, max_changed_components=2,
                         single_fraction=args.single_fraction, taper=args.taper
                     )
@@ -97,18 +113,26 @@ def run(args):
                 remaining = q-query_count
                 audit = donor_stability_audit(
                     x, scores, b, search.verified_edit or (),
-                    audit_donors, comps, model,
+                    audit_donors, effective_comps, model,
                     budget_remaining=min(args.reserve, remaining),
                     taper=args.taper
                 )
                 actual_calls = int(calls["examples"]) - before
                 if actual_calls != query_count+audit["tested"] or actual_calls > q:
                     raise AssertionError("counterfactual model budget accounting failed")
-                changed = (splice(x, donor, comps, search.verified_edit,
+                changed = (splice(x, donor, effective_comps, search.verified_edit,
                                   taper=args.taper) if search.is_valid else None)
                 edit_distance = (float(np.linalg.norm(changed-x) /
                                        (max(np.linalg.norm(x), np.linalg.norm(donor)) + 1e-8))
                                  if changed is not None else None)
+                n_regions = (sum(len(getattr(effective_comps[j], "regions", (effective_comps[j],)))
+                                 for j in search.verified_edit)
+                             if search.is_valid else None)
+                gravity_ratio = None
+                if changed is not None and args.dataset == "UCI_HAR":
+                    old = gravity_residual_roughness(x, mu, std)
+                    new = gravity_residual_roughness(changed, mu, std)
+                    gravity_ratio = float(new / max(old, 1e-6))
                 rows.append({
                     "sample": i, "original_window_index": int(selected[i]),
                     "subject": int(test_ids[selected[i]]),
@@ -121,6 +145,10 @@ def run(args):
                     "components": (",".join(map(str, search.verified_edit))
                                    if search.is_valid else ""),
                     "relative_l2": edit_distance,
+                    "n_physical_3axis_regions_changed": n_regions,
+                    "gravity_roughness_ratio_original_units": gravity_ratio,
+                    "logical_operator": ("coupled_acceleration" if args.coupled_uci_har
+                                         else "independent_sensor_groups"),
                     "local_minimality_checked": int(bool(minimal_checked)),
                     "search_calls": query_count,
                     "donor_audit_calls": audit["tested"],
@@ -136,7 +164,7 @@ def run(args):
         # components still produce B after tapering? Neither answer influences
         # donor selection, candidate selection or the Q8/Q16 decisions.
         check = model(np.stack([
-            donor, splice(x, donor, comps, tuple(range(len(comps))),
+            donor, splice(x, donor, effective_comps, tuple(range(len(effective_comps))),
                           taper=args.taper),
         ]))
         donor_target_valid = int(np.argmax(check[0]) == b)
@@ -185,6 +213,15 @@ def run(args):
                 "mean_changed_if_valid": (
                     float(np.mean([r["n_components_changed"] for r in group if r["verified"]]))
                     if any(r["verified"] for r in group) else None),
+                "mean_physical_regions_if_valid": (
+                    float(np.mean([r["n_physical_3axis_regions_changed"]
+                                   for r in group if r["verified"]]))
+                    if any(r["verified"] for r in group) else None),
+                "median_gravity_roughness_ratio_if_valid": (
+                    float(np.median([r["gravity_roughness_ratio_original_units"]
+                                    for r in group if r["verified"]]))
+                    if args.dataset == "UCI_HAR" and any(r["verified"] for r in group)
+                    else None),
                 "n_robust_on_both_extra_donors": sum(
                     r["verified"] and r["donor_audit_calls"] == args.reserve and
                     r["donor_target_flip_fraction"] == 1.0 for r in group),
@@ -209,6 +246,10 @@ def run(args):
         "budgets_additional_including_optional_donor_robustness": budgets,
         "reserve_donor_audits": args.reserve,
         "operator": "TRAIN class B actual window patches; seam taper",
+        "atomic_candidate_count": len(effective_comps),
+        "coupled_uci_har_acceleration": bool(args.coupled_uci_har),
+        "logical_candidates_differ_in_area_when_coupled": bool(args.coupled_uci_har),
+        "gravity_roughness_is_proxy_not_guarantee": True,
         "target": "runner-up class in original model logits",
         "candidate_policies": ["class_contrastive_prior", "uniform"],
         "search_policies": ["singleton_then_pair", "multi_component_path_with_local_pruning"],
@@ -239,6 +280,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--npz-path", required=True, type=Path)
     p.add_argument("--dataset", default="UCI_HAR", choices=["UCI_HAR", "PAMAP2"])
+    p.add_argument("--coupled-uci-har", action="store_true",
+                   help="One edit atom changes body_acc and total_acc together, or gyro alone")
     p.add_argument("--out-dir", required=True, type=Path)
     p.add_argument("--model", choices=["raw_mlp", "extratrees"], default="raw_mlp")
     p.add_argument("--budgets", default="8,16")
