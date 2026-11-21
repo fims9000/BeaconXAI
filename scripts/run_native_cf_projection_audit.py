@@ -138,6 +138,16 @@ def run(args):
             native_valid=bool(native is not None)
             projected_valid=projected is not None and projected_status=="verified_target_flip"
 
+            inloop_before=int(calls["examples"])
+            inloop, inloop_status, inloop_calls, inloop_batches, _, inloop_error=run_native(
+                x, donor, target, predict, scorer, q,
+                args.seed*100003+int(selected[i]), MultiSubSpaCECF,
+                gravity_normalizer=(mu,sd)
+            )
+            if int(calls["examples"])-inloop_before!=inloop_calls or inloop_calls>q:
+                raise AssertionError("in-loop native model query budget mismatch")
+            actual_online+=inloop_calls
+
             beacon_before=int(calls["examples"])
             b=search_counterfactual_path(
                 x,base,donor,linked,ranking,predict,target_class=target,
@@ -152,6 +162,7 @@ def run(args):
             values=[
                 ("native_original",native,native_valid,status,native_calls),
                 ("native_projected",projected,projected_valid,projected_status,native_calls+extra),
+                ("native_inloop_projected",inloop,bool(inloop is not None),inloop_status,inloop_calls),
                 ("beacon_gravity",beacon,bool(b.is_valid),b.status,actual_beacon),
             ]
             for name,attempt,valid,stage,cost in values:
@@ -173,15 +184,21 @@ def run(args):
                     "source":source,"target":target,
                     "verified":int(valid),"status":stage,
                     "online_calls_if_run_alone":cost,
-                    "native_queries_before_projection":native_calls,
-                    "projection_query_used":extra,
+                    "native_queries_before_projection":(
+                        inloop_calls if name=="native_inloop_projected" else native_calls),
+                    "projection_query_used":extra if name=="native_projected" else 0,
                     "relative_l2":distance,
                     "edited_fraction":edited,
                     "gravity_ratio":ratio,
                     "source_prediction_correct_offline":int(source==int(yte[selected[i]])),
-                    "native_upstream_error":error,
-                    "native_population":pop,
-                    "same_original_native_output_projected":True,
+                    "native_upstream_error":(
+                        inloop_error if name=="native_inloop_projected"
+                        else error if name.startswith("native_") else ""),
+                    "native_population":pop if name.startswith("native_") else None,
+                    "same_original_native_output_projected":(
+                        name in ("native_original","native_projected")),
+                    "projection_in_model_and_outlier_objective":(
+                        name=="native_inloop_projected"),
                 })
     if int(calls["examples"])!=len(test)+actual_online:
         raise AssertionError("shared experiment actual calls not accounted")
@@ -196,6 +213,9 @@ def run(args):
         "native_pilot_configuration":"no FI, train-only Gaussian outlier, population 2/4, one individual-channel iteration",
         "native_baseline_is_not_paper_configuration":True,
         "projection_is_not_part_of_upstream_method":True,
+        "native_inloop_projection_replaces_model_and_outlier_inputs":True,
+        "native_inloop_variant_is_not_original_multisubspace":True,
+        "native_inloop_uses_same_initial_random_seed_as_original":True,
         "projection_formula_raw_units":"b'=(b_native+t_native-(t_source-b_source))/2; t'=b'+(t_source-b_source)",
         "projection_minimizes_raw_l2_to_native_under_residual_constraint":True,
         "physical_validity_beyond_single_invariant_unproven":True,
@@ -210,6 +230,7 @@ def run(args):
         "actual_online_model_calls_including_shared_native_prefix":actual_online,
         "total_model_evaluations":calls["examples"],
         "native_projection_counts_share_source_prefix":True,
+        "inloop_native_search_has_its_own_counted_evaluations":True,
         "no_donor_robustness_claim":True,
     }
     (output/"manifest.json").write_text(
