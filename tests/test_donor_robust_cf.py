@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from beaconxai.donor_robust_cf import search_robust_counterfactual
+from beaconxai.donor_robust_cf import search_robust_counterfactual, search_backward_robust_counterfactual
 
 
 class C:
@@ -119,3 +119,73 @@ def test_malformed_model_scores_are_not_certificates():
         return np.zeros((len(batch), 3))
     with pytest.raises(ValueError, match="model must return"):
         run(predictor=wrong)
+
+
+
+def test_backward_group_pruning_two_donors_exact_q_and_minimality():
+    calls=[0]
+    def counted(batch):
+        calls[0]+=len(batch)
+        return model(batch)
+    result=search_backward_robust_counterfactual(
+        X,model(X[None])[0],DONORS[:2],REGIONS,
+        list(reversed(range(6))),counted,
+        target_class=1,budget=16,taper=0,
+        maximum_modified_fraction=.5,
+    )
+    assert result.is_certified
+    assert result.certified_edit==(0,1,2)
+    assert result.local_minimality_checked
+    assert result.queries==calls[0]<=16
+    for donor_index in range(2):
+        assert any(p.components==(0,1,2) and p.donor_index==donor_index
+                   and p.targeted_flip for p in result.probes)
+
+
+def test_backward_abstains_on_nonrobust_full_mask():
+    # First donor predicts target, second donor does not.
+    pool=[np.ones_like(X),np.zeros_like(X)]
+    result=search_backward_robust_counterfactual(
+        X,model(X[None])[0],pool,REGIONS,
+        list(reversed(range(6))),model,
+        target_class=1,budget=16,taper=0,
+    )
+    assert not result.is_certified
+    assert result.queries==2
+    assert result.ever_found_single_donor_flip
+
+
+def test_backward_budget_and_cap_do_not_fake_certificate():
+    count=[0]
+    def counted(batch):
+        count[0]+=len(batch)
+        return model(batch)
+    result=search_backward_robust_counterfactual(
+        X,model(X[None])[0],DONORS[:2],REGIONS,
+        list(reversed(range(6))),counted,
+        target_class=1,budget=4,taper=0,
+        maximum_modified_fraction=.35,
+    )
+    assert result.queries==count[0]==4
+    assert not result.is_certified
+    assert result.certified_edit is None
+    assert not result.local_minimality_checked
+
+
+def test_backward_rejects_incomplete_initial_budget_and_bad_scores():
+    with pytest.raises(ValueError,match="budget"):
+        search_backward_robust_counterfactual(
+            X,model(X[None])[0],DONORS[:2],REGIONS,
+            list(range(6)),model,target_class=1,budget=1,taper=0,
+        )
+    with pytest.raises(ValueError,match="removal order"):
+        search_backward_robust_counterfactual(
+            X,model(X[None])[0],DONORS[:2],REGIONS,
+            [0,0,0,0,0,0],model,target_class=1,budget=16,taper=0,
+        )
+    with pytest.raises(ValueError,match="classifier"):
+        search_backward_robust_counterfactual(
+            X,model(X[None])[0],DONORS[:2],REGIONS,
+            list(range(6)),lambda x:np.full((len(x),2),np.nan),
+            target_class=1,budget=16,taper=0,
+        )
