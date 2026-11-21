@@ -120,6 +120,7 @@ def run(args):
     baseline=model(test)
     scorer=TrainingGaussianOutlier(train)
     components=make_components(train.shape[1:],10,"per_channel")
+    time_components=make_components(train.shape[1:],10,"all_channels")
     donor_bank=fit_real_donor_bank(
         train,ytrain,components,max_donors=args.donors,seed=args.seed+10
     )
@@ -139,27 +140,45 @@ def run(args):
         uniform=np.random.default_rng(
             args.seed*100003+i+10
         ).permutation(len(components)).astype(int).tolist()
+        time_prior=contrastive_prior(
+            x,source,target,profiles,time_components
+        )
+        time_directed=np.argsort(
+            -np.abs(time_prior),kind="stable"
+        ).astype(int).tolist()
+        time_uniform=np.random.default_rng(
+            args.seed*100003+i+20
+        ).permutation(len(time_components)).astype(int).tolist()
         for q in qs:
             for method in ("beacon_directed","beacon_uniform",
                            "beacon_directed_extended","beacon_uniform_extended",
+                           "beacon_timeblock","beacon_timeblock_uniform",
                            "donor_line","native_multisubspace"):
                 before=int(calls["examples"])
                 edit=None
                 status="not_found"
                 if method.startswith("beacon_"):
-                    order=directed if method.startswith("beacon_directed") else uniform
-                    max_groups=(
-                        args.max_extended if method.endswith("_extended")
-                        else args.max_changed
-                    )
+                    if method=="beacon_timeblock":
+                        order,atoms,max_groups=(
+                            time_directed,time_components,len(time_components))
+                    elif method=="beacon_timeblock_uniform":
+                        order,atoms,max_groups=(
+                            time_uniform,time_components,len(time_components))
+                    else:
+                        atoms=components
+                        order=directed if method.startswith("beacon_directed") else uniform
+                        max_groups=(
+                            args.max_extended if method.endswith("_extended")
+                            else args.max_changed
+                        )
                     result=search_counterfactual_path(
-                        x,base,donor,components,order,model,
+                        x,base,donor,atoms,order,model,
                         target_class=target,budget=q,
-                        max_changed_components=min(max_groups, len(components)),
+                        max_changed_components=min(max_groups, len(atoms)),
                         seed_singletons=3,taper=args.taper,
                     )
                     if result.is_valid:
-                        edit=splice(x,donor,components,result.verified_edit,
+                        edit=splice(x,donor,atoms,result.verified_edit,
                                     taper=args.taper)
                     status=result.status
                     reported=result.calls
@@ -199,13 +218,23 @@ def run(args):
                     "modified_fraction":fraction,
                     "relative_l2":rel,
                     "locally_minimal_verified":local_minimality,
+                    "partition_components":(
+                        len(time_components) if method.startswith("beacon_timeblock")
+                        else len(components) if method.startswith("beacon_")
+                        else None
+                    ),
                 })
         if args.offline_prefix:
             # OFFLINE FULL-REFERENCE diagnostic, NEVER exposed to search
             # decisions, model selection, or held-out labels.
-            for name,order in (("directed",directed),("uniform",uniform)):
+            for name,order,atoms in (
+                ("directed",directed,components),
+                ("uniform",uniform,components),
+                ("timeblock_directed",time_directed,time_components),
+                ("timeblock_uniform",time_uniform,time_components),
+            ):
                 candidates=np.stack([
-                    splice(x,donor,components,order[:n],taper=args.taper)
+                    splice(x,donor,atoms,order[:n],taper=args.taper)
                     for n in range(1,len(order)+1)
                 ])
                 start=int(calls["examples"])
@@ -253,6 +282,8 @@ def run(args):
         "same_frozen_classifier_source_target_and_donor_per_window":True,
         "methods_have_different_intervention_operators":True,
         "component_fraction_per_group":1/len(components),
+        "timeblock_fraction_per_group":1/len(time_components),
+        "timeblock_uses_all_archive_channels_without_sensor_physics_claim":True,
         "beacon_standard_max_groups":args.max_changed,
         "beacon_extended_max_groups":args.max_extended,
         "offline_prefix_oracle_only_descriptive":args.offline_prefix,
