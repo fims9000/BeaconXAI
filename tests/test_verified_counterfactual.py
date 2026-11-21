@@ -49,7 +49,7 @@ def test_unverified_is_explicit_abstention_and_budget_hard():
     assert not r.is_valid
     assert r.verified_edit is None
     assert r.status == "not_found_within_budget"
-    assert r.evaluations == 2
+    assert r.evaluations == 1  # no paired probe is possible without two evaluated singletons
 
 def test_no_target_label_or_ground_truth_parameter_and_third_class_check():
     def other(batch):
