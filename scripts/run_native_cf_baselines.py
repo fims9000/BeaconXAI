@@ -26,6 +26,7 @@ from beaconxai.native_cf_budget import (
     CountedCFModel, QueryBudgetExceeded, NoFeatureImportance, TrainingGaussianOutlier
 )
 from beaconxai.physical_groups import coupled_priority, uci_har_coupled_groups
+from beaconxai.native_cf_projection import ProjectedCFModel, ProjectedTrainingOutlier
 from beaconxai.real_donor import fit_real_donor_bank, nearest_context_index
 from beaconxai.subject_sampling import balanced_subject_sample
 from beaconxai.verified_counterfactual import splice
@@ -36,13 +37,22 @@ from scripts.run_verified_counterfactual_benchmark import gravity_residual_rough
 UPSTREAM_SHA = "4bbeae86bbc6ad02f7ee79fb550c9866682f6deb"
 
 
-def run_native(x, donor, target, model, scorer, q, seed, native_type):
-    wrapper = CountedCFModel(model, x.shape, n_classes=6, budget=q)
+def run_native(x, donor, target, model, scorer, q, seed, native_type,
+               *, gravity_normalizer=None):
+    if gravity_normalizer is None:
+        wrapper = CountedCFModel(model, x.shape, n_classes=6, budget=q)
+        objective_scorer = scorer
+    else:
+        mu, sd = gravity_normalizer
+        wrapper = ProjectedCFModel(
+            model, x, mu, sd, n_classes=6, budget=q)
+        objective_scorer = ProjectedTrainingOutlier(
+            scorer, wrapper.projector)
     pop = {8: 2, 16: 4}[q]
     np.random.seed(seed)
     random.seed(seed)
     upstream = native_type(
-        model_wrapper=wrapper, outlier_calculator=scorer,
+        model_wrapper=wrapper, outlier_calculator=objective_scorer,
         fi_method=NoFeatureImportance(), grouped_channels_iter=0,
         individual_channels_iter=1, pruning_iter=0,
         population_size=pop, init_pct=.4, reinit=False,
