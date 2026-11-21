@@ -484,3 +484,46 @@ def search_sparse_robust_counterfactual(
                 return result(current,minimal=completed)
         return result(current,minimal=True)
     return result(None)
+
+
+
+def train_profile_donor_gains(
+    x: np.ndarray,
+    donors: Sequence[np.ndarray],
+    components: Sequence,
+    class_profiles: dict,
+    source_class: int,
+    target_class: int,
+    *,
+    taper: int = 2,
+    var_floor: float = .5,
+) -> np.ndarray:
+    """Cheap predicted A-to-B evidence changes for each real TRAIN donor patch.
+
+    Scores are contrasts of diagonal-Gaussian-like *TRAIN class profile*
+    distances. They are not classifier calls, and not certified importance.
+    Gains for each candidate mask are modeled additively only for ranking;
+    real mask validity always requires black-box measurements.
+    """
+    from .verified_counterfactual import splice
+    x=np.asarray(x,dtype=float)
+    if source_class not in class_profiles or target_class not in class_profiles:
+        raise ValueError("TRAIN class profile not found")
+    mu_a,var_a=class_profiles[source_class]
+    mu_b,var_b=class_profiles[target_class]
+    if (x.ndim!=2 or mu_a.shape!=x.shape or mu_b.shape!=x.shape
+        or var_a.shape!=x.shape or var_b.shape!=x.shape
+        or not np.isfinite(x).all() or not np.isfinite(mu_a).all()
+        or not np.isfinite(mu_b).all() or not np.isfinite(var_a).all()
+        or not np.isfinite(var_b).all() or var_floor<=0):
+        raise ValueError("invalid TRAIN profile geometry")
+    scale=np.maximum((var_a+var_b)/2.,var_floor)
+    def contrast(z):
+        return ((z-mu_a)**2-(z-mu_b)**2)/scale
+    reference=contrast(x)
+    scores=np.empty((len(donors),len(components)),dtype=float)
+    for didx,donor in enumerate(donors):
+        for j in range(len(components)):
+            change=splice(x,donor,components,(j,),taper=taper)
+            scores[didx,j]=float(np.sum(contrast(change)-reference))
+    return scores
