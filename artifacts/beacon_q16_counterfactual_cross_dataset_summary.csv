@@ -1,4 +1,4 @@
-dataset,model,test_accuracy,test_n,method,online_budget,online_donors,online_certified_compact,verified_1deletion,mean_online_queries,unseen_D3_D4_transfer,unseen_test_type,primary_comparison,primary_p,actions_run_id
+dataset,model,test_accuracy,test_n,method,online_budget,online_donors,online_certified_compact,verified_1deletion,mean_online_queries,unseen_donor_transfer_count,unseen_test_type,primary_comparison,primary_p,actions_run_id
 UEA_NATOPS,ExtraTrees,0.838889,180,sparse_maximin,16,2,67,64,13.49,,not_evaluated,forward_robust,0.0024939179,44947081765
 UEA_NATOPS,ExtraTrees,0.838889,180,forward_robust,16,2,51,45,11.00,,not_evaluated,sparse_maximin,0.0024939179,44947081765
 UEA_NATOPS,ExtraTrees,0.838889,180,backward_robust_chunks,16,2,48,41,6.45,,not_evaluated,exploratory,,44947081765
@@ -10,3 +10,5 @@ UEA_PenDigits,raw_MLP,0.947684391,320,static_sparse,16,2,252,246,8.621875,158,D3
 UEA_PenDigits,raw_MLP,0.947684391,320,pairs_static,16,2,256,251,9.3875,150,D3D4_posthoc_same_mask,exploratory,,44950732585
 UEA_PenDigits,raw_MLP,0.947684391,320,pairs_adaptive,16,2,257,254,9.178125,149,D3D4_posthoc_same_mask,exploratory,,44950732585
 UEA_PenDigits,raw_MLP,0.947684391,320,additive_adaptive,16,2,257,253,8.94375,150,D3D4_posthoc_same_mask,static_sparse,0.125,44950732585
+UEA_SpokenArabicDigits,ExtraTrees,0.9272396544,320,K2_nearest,16,2,139,137,12.515625,91,D4D5_posthoc_same_mask,K3_stress,0.0432852507,44953711131
+UEA_SpokenArabicDigits,ExtraTrees,0.9272396544,320,K3_stress,16,3,122,111,13.878125,80,D4D5_posthoc_same_mask,K2_nearest,0.0432852507,44953711131
