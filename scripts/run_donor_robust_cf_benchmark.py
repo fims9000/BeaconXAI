@@ -148,13 +148,13 @@ def run(args):
                         taper=args.taper, prune=True,
                     )
                     edit = result.certified_edit
-                    direct_flip = int(result.ever_found_single_donor_flip)
+                    direct_flip = int(any(p.donor_index == 0 and p.targeted_flip
+                                          for p in result.probes))
                     certified = int(result.is_certified)
                     locally_minimal = int(
                         result.is_certified and result.local_minimality_checked
                     )
                     status = result.status
-                    queries = result.queries
                 else:
                     old = search_counterfactual_path(
                         x, base, donor_pool[0], groups, order, model,
@@ -176,7 +176,6 @@ def run(args):
                     edit = old.verified_edit if certified else None
                     status = ("verified_all_selected_donors" if certified
                               else "not_certified_within_budget")
-                    queries = old.probes
                 actual = int(calls["examples"]) - start
                 if actual > q or actual < 0:
                     raise AssertionError("model-call budget violated")
