@@ -53,6 +53,14 @@ def aggregate(rows: list[dict]) -> list[dict]:
             "certified_three_donors": len(certified),
             "locally_minimal_and_three_donors": len(local_minimal),
             "abstentions": len(group) - len(certified),
+            "n_certified_surviving_all_unseen_training_donors": sum(
+                r["withheld_all_flipped"] for r in certified),
+            "mean_withheld_flip_fraction_given_certified": (
+                float(np.mean([r["withheld_flip_fraction"] for r in certified]))
+                if certified else None),
+            "mean_withheld_donor_checks_given_certified": (
+                float(np.mean([r["withheld_n_checked"] for r in certified]))
+                if certified else None),
             "subject_macro_certified": float(np.mean([
                 np.mean([r["certified_three_donors"] for r in g])
                 for g in per_subject
@@ -107,6 +115,7 @@ def run(args):
     original_scores = model(test)
     qrows = []
     offline_reference_calls = 0
+    offline_withheld_donor_calls = 0
 
     for i, x in enumerate(test):
         base = original_scores[i]
@@ -212,6 +221,40 @@ def run(args):
                                                    for j in donor_indices),
                     "no_test_labels_used": True,
                 })
+        # A separate post-hoc challenge set of training donors was not used
+        # to select components or certify the 3-donor result. This cannot
+        # guarantee generalization to unseen people or new distributions.
+        heldout = tuple(
+            bank.donors[target][j]
+            for j in range(len(bank.donors[target])) if j not in donor_indices
+        )
+        if not heldout:
+            raise ValueError("No withheld TRAIN donors available for validation")
+        sample_rows = [r for r in qrows if r["sample"] == i]
+        for row in sample_rows:
+            row["withheld_n_checked"] = 0
+            row["withheld_n_flipped"] = 0
+            row["withheld_flip_fraction"] = None
+            row["withheld_all_flipped"] = 0
+            if not row["certified_three_donors"]:
+                continue
+            key = tuple(int(v) for v in row["components"].split(","))
+            start_check = int(calls["examples"])
+            withheld_audit = donor_stability_audit(
+                x, base, target, key, heldout, groups, model,
+                budget_remaining=len(heldout), taper=args.taper
+            )
+            spent = int(calls["examples"]) - start_check
+            if spent != withheld_audit["tested"]:
+                raise AssertionError("withheld donor evaluations not accounted")
+            offline_withheld_donor_calls += spent
+            row["withheld_n_checked"] = withheld_audit["tested"]
+            row["withheld_n_flipped"] = withheld_audit["target_flips"]
+            row["withheld_flip_fraction"] = withheld_audit["flip_fraction"]
+            row["withheld_all_flipped"] = int(
+                withheld_audit["tested"] == len(heldout) and
+                withheld_audit["target_flips"] == len(heldout)
+            )
         # This separate, explicitly counted offline diagnostic never affects
         # the Q budget or any decision for the current test sample.
         reference = model(np.stack([
@@ -233,7 +276,10 @@ def run(args):
                 )
 
     online_total = sum(r["online_model_calls"] for r in qrows)
-    if calls["examples"] != len(test)+online_total+offline_reference_calls:
+    if calls["examples"] != (
+        len(test) + online_total + offline_reference_calls +
+        offline_withheld_donor_calls
+    ):
         raise AssertionError("some model evaluations were not accounted")
     summary = aggregate(qrows)
     out = Path(args.out_dir)
@@ -256,12 +302,16 @@ def run(args):
         "budget_max_additional_queries_including_donor_checks": budgets,
         "baseline_model_evaluations": len(test),
         "all_online_model_evaluations": online_total,
-        "offline_diagnostic_evaluations": offline_reference_calls,
+        "offline_reference_evaluations": offline_reference_calls,
+        "offline_withheld_donor_checks": offline_withheld_donor_calls,
+        "withheld_donors_per_certified_candidate": len(bank.donors[target])-3,
+        "withheld_audit_is_posthoc_and_not_part_of_online_Q": True,
         "total_evaluations": calls["examples"],
         "n_windows": len(test),
         "model_evaluation_means_one_evaluated_input_not_one_batch": True,
         "limitations": [
             "3-of-3 donor certificate is valid only for selected donors, this classifier and operator",
+            "Withheld donors are unseen in search but drawn from the same TRAIN bank, not independent study subjects",
             "No statistical population coverage or physical causality is implied",
             "Prioritization, donor selection and model training costs are offline",
             "Local minimality is relative to single component deletions and selected donors",
