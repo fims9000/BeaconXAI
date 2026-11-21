@@ -159,6 +159,11 @@ def run(args):
     if args.max_test < len(np.unique(sid_test)):
         raise ValueError("max-test must cover each subject (>=9 for official UCI HAR)")
     chosen=balanced_subject_sample(sid_test,args.max_test,args.seed+301)
+    sampled_subjects=sorted(map(int,np.unique(sid_test[chosen])))
+    if args.profile_subject is not None:
+        chosen=chosen[sid_test[chosen]==args.profile_subject]
+        if len(chosen)!=1:
+            raise ValueError("single-subject profile requires exactly one selected window")
     test=apply_standardizer(raw_test[chosen],mu,sd)
     base=model(test)
     # Offline train-only check of donor *model predictions*. FastPACE uses
@@ -257,6 +262,9 @@ def run(args):
         "dataset_sha":hashlib.sha256(path.read_bytes()).hexdigest(),
         "dataset_protocol":protocol,
         "n_test_windows_sampled":len(chosen),
+        "all_subjects_preselected_before_profile":sampled_subjects,
+        "profile_subject":args.profile_subject,
+        "profile_is_not_subject_macro_validation":args.profile_subject is not None,
         "n_windows_without_model_predicted_target_donor":no_eligible,
         "train_only_donor_class_checks_offline":n_train_donor_checks,
         "cached_original_window_calls":len(test),
@@ -287,6 +295,7 @@ def main():
     p.add_argument("--query-caps",default="16,2048")
     p.add_argument("--max-plan-calls",type=int,default=1)
     p.add_argument("--max-test",type=int,default=9)
+    p.add_argument("--profile-subject",type=int,default=None)
     p.add_argument("--donors",type=int,default=8)
     p.add_argument("--seed",type=int,default=57)
     p.add_argument("--trees",type=int,default=120)
