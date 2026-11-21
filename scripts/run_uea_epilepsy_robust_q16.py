@@ -270,7 +270,7 @@ def run(args):
     write_csv(out/"per_sample.csv",[
         {**r,"selected":(
             ",".join(map(str,r["selected"])) if r["selected"] is not None else "")
-        } for r in records,
+        } for r in records
     ])
     write_csv(out/"summary.csv",comparison)
     manifest={
