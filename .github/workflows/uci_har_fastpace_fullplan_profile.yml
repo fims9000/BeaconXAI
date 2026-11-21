@@ -6,6 +6,8 @@ on:
       - feature/contrastive-q16-20261119
     paths:
       - '.github/workflows/uci_har_fastpace_fullplan_profile.yml'
+      - 'scripts/run_native_fastpace_query_probe.py'
+      - 'beaconxai/native_fastpace_meter.py'
   workflow_dispatch:
 
 concurrency:
