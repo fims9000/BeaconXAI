@@ -53,9 +53,17 @@ def run(args):
     )
     train = apply_standardizer(raw_train, mu, std)
     comps = make_components(train.shape[1:], 12, "pamap3")
-    if args.coupled_uci_har and args.dataset != "UCI_HAR":
-        raise ValueError("coupled body/total acceleration is UCI HAR only")
-    effective_comps = uci_har_coupled_groups(comps) if args.coupled_uci_har else comps
+    if (args.coupled_uci_har or args.gravity_preserving_uci_har) and args.dataset != "UCI_HAR":
+        raise ValueError("linked body/total acceleration is UCI HAR only")
+    if args.coupled_uci_har and args.gravity_preserving_uci_har:
+        raise ValueError("coupled and gravity-preserving modes are mutually exclusive")
+    if args.gravity_preserving_uci_har:
+        effective_comps = uci_har_coupled_groups(
+            comps, gravity_preserving=True, mean=mu, scale=std)
+    elif args.coupled_uci_har:
+        effective_comps = uci_har_coupled_groups(comps)
+    else:
+        effective_comps = comps
     bank = fit_real_donor_bank(
         train, y_train, comps, max_donors=args.donors, seed=args.seed + 10
     )
@@ -73,7 +81,7 @@ def run(args):
         if a not in profiles or b not in bank.donors:
             raise ValueError("predicted class absent from train")
         prior = contrastive_prior(x, a, b, profiles, comps)
-        cheap_rank_scores = (coupled_priority(prior, comps) if args.coupled_uci_har
+        cheap_rank_scores = (coupled_priority(prior, comps) if (args.coupled_uci_har or args.gravity_preserving_uci_har)
                              else np.abs(prior))
         rank = np.argsort(-cheap_rank_scores, kind="stable").astype(int).tolist()
         rng = np.random.default_rng(args.seed * 100003 + int(selected[i]))
@@ -147,7 +155,8 @@ def run(args):
                     "relative_l2": edit_distance,
                     "n_physical_3axis_regions_changed": n_regions,
                     "gravity_roughness_ratio_original_units": gravity_ratio,
-                    "logical_operator": ("coupled_acceleration" if args.coupled_uci_har
+                    "logical_operator": ("gravity_preserving_acceleration" if args.gravity_preserving_uci_har
+                                         else "coupled_acceleration" if args.coupled_uci_har
                                          else "independent_sensor_groups"),
                     "local_minimality_checked": int(bool(minimal_checked)),
                     "search_calls": query_count,
@@ -248,7 +257,12 @@ def run(args):
         "operator": "TRAIN class B actual window patches; seam taper",
         "atomic_candidate_count": len(effective_comps),
         "coupled_uci_har_acceleration": bool(args.coupled_uci_har),
-        "logical_candidates_differ_in_area_when_coupled": bool(args.coupled_uci_har),
+        "gravity_preserving_uci_har": bool(args.gravity_preserving_uci_har),
+        "logical_candidates_differ_in_area_when_coupled":
+            bool(args.coupled_uci_har or args.gravity_preserving_uci_har),
+        "gravity_preservation": (
+            "Preserve original total_acc-body_acc in unnormalized acceleration units"
+            if args.gravity_preserving_uci_har else None),
         "gravity_roughness_is_proxy_not_guarantee": True,
         "target": "runner-up class in original model logits",
         "candidate_policies": ["class_contrastive_prior", "uniform"],
@@ -282,6 +296,8 @@ def main():
     p.add_argument("--dataset", default="UCI_HAR", choices=["UCI_HAR", "PAMAP2"])
     p.add_argument("--coupled-uci-har", action="store_true",
                    help="One edit atom changes body_acc and total_acc together, or gyro alone")
+    p.add_argument("--gravity-preserving-uci-har", action="store_true",
+                   help="Change body_acc and reconstruct total_acc to retain original gravity residual")
     p.add_argument("--out-dir", required=True, type=Path)
     p.add_argument("--model", choices=["raw_mlp", "extratrees"], default="raw_mlp")
     p.add_argument("--budgets", default="8,16")
