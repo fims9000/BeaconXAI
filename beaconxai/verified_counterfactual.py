@@ -26,20 +26,23 @@ def splice(x: np.ndarray, donor: np.ndarray, components: Sequence,
     for idx in selected:
         if idx < 0 or idx >= len(components):
             raise ValueError("component index out of range")
-        c = components[idx]
-        if not (0 <= c.t0 < c.t1 <= len(x) and 0 <= c.c0 < c.c1 <= x.shape[1]):
-            raise ValueError("invalid component boundaries")
-        sl = np.s_[c.t0:c.t1, c.c0:c.c1]
-        if np.any(changed[sl]):
-            raise ValueError("overlapping components cannot be combined")
-        changed[sl] = True
-        n = c.t1 - c.t0
-        w = np.ones(n, dtype=float)
-        edge = min(taper, n // 2)
-        if edge:
-            w[:edge] = np.linspace(0, 1, edge + 2)[1:-1]
-            w[-edge:] = np.linspace(1, 0, edge + 2)[1:-1]
-        out[sl] = x[sl] * (1 - w[:, None]) + donor[sl] * w[:, None]
+        candidate = components[idx]
+        # A logical candidate may edit multiple physically related channels.
+        # It still consumes exactly ONE model evaluation after this splice.
+        for c in getattr(candidate, "regions", (candidate,)):
+            if not (0 <= c.t0 < c.t1 <= len(x) and 0 <= c.c0 < c.c1 <= x.shape[1]):
+                raise ValueError("invalid component boundaries")
+            sl = np.s_[c.t0:c.t1, c.c0:c.c1]
+            if np.any(changed[sl]):
+                raise ValueError("overlapping components cannot be combined")
+            changed[sl] = True
+            n = c.t1 - c.t0
+            w = np.ones(n, dtype=float)
+            edge = min(taper, n // 2)
+            if edge:
+                w[:edge] = np.linspace(0, 1, edge + 2)[1:-1]
+                w[-edge:] = np.linspace(1, 0, edge + 2)[1:-1]
+            out[sl] = x[sl] * (1 - w[:, None]) + donor[sl] * w[:, None]
     return out
 
 
