@@ -27,7 +27,7 @@ def test_pair_interaction_detected_and_verified():
                                      target_class=1, budget=6, taper=0)
     assert r.status == "verified_target_flip"
     assert r.verified_edit == (0, 1)
-    assert r.evaluations == count[0] == 5  # 3 singleton, then (0,1) pair
+    assert r.evaluations == count[0] == 4  # 3 singleton, then (0,1) pair
     assert r.queries[-1].interaction_pair == pytest.approx(0.0)
     assert all(not q.flip_to_target for q in r.queries[:-1])
 
