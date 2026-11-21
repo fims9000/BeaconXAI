@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from beaconxai.contrastive import fit_class_profiles,make_components
-from scripts.preprocess_uea_spokenarabic import prepare_spokenarabic
+from scripts.preprocess_uea_spokenarabic import prepare_spokenarabic,_resample_multichannel
 from scripts.run_uea_spokenarabic_k3_transfer import (
     METHODS,Q,assign_five_donor_roles,
     evaluate_method,paired_primary,summarize,no_donor_result,
@@ -137,3 +137,27 @@ def test_unavailable_five_donors_is_a_zero_not_an_exclusion():
     assert result["transfer_D4_D5"]==0
     assert result["online_verified"]==0
     assert result["model_queries"]==0
+
+
+
+def test_variable_length_normalized_interpolation_preserves_endpoints_and_length():
+    samples=[
+        [np.linspace(float(c),float(c+1),31+c) for c in range(13)],
+        [np.linspace(float(c),float(c+1),93) for c in range(13)],
+    ]
+    x,lengths=_resample_multichannel(samples,2)
+    assert x.shape==(2,13,93)
+    assert lengths.shape==(2,13)
+    assert int(lengths[0,0])==31 and int(lengths[0,12])==43
+    assert np.all(lengths[1]==93)
+    np.testing.assert_allclose(x[:,:,0],np.arange(13)[None],rtol=0,atol=1e-6)
+    np.testing.assert_allclose(x[:,:,-1],(np.arange(13)+1)[None],rtol=0,atol=1e-6)
+    np.testing.assert_allclose(x[0],x[1],rtol=0,atol=2e-6)
+
+
+def test_variable_length_invalid_channel_geometry_is_rejected():
+    wrong=[[np.zeros(4)]*12]
+    with pytest.raises(ValueError,match="13 MFCC"):
+        _resample_multichannel(wrong,1)
+    with pytest.raises(ValueError,match=">=2 finite"):
+        _resample_multichannel([[np.array([np.nan,1.])]*13],1)
