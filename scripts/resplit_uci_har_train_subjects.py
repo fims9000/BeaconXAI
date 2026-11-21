@@ -34,7 +34,7 @@ def resplit_training_subjects(source_npz: Path, out: Path,
     if (not mask.any() or mask.all() or x.ndim != 3 or x.shape[1:] != (128, 9)
         or len(x) != len(y) or len(x) != len(sid)):
         raise ValueError("invalid official training arrays or subject split")
-    if (len(set(y[mask])) != len(set(y[~mask])) or
+    if (set(y[mask]) != set(y[~mask]) or
             len(set(y[mask])) < 2):
         raise ValueError("heldout split must contain all fitted class labels")
     train_set, test_set = set(sid[~mask]), set(sid[mask])
@@ -45,6 +45,9 @@ def resplit_training_subjects(source_npz: Path, out: Path,
         out, x_train=x[~mask], y_train=y[~mask],
         subject_train=sid[~mask], x_test=x[mask], y_test=y[mask],
         subject_test=sid[mask],
+        dataset_protocol=np.asarray(
+            "UCI HAR internal heldout of original TRAIN participants only"
+        ),
     )
     return {
         "provenance": "official UCI HAR TRAIN only",
