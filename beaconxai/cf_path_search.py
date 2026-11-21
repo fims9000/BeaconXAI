@@ -150,3 +150,112 @@ def search_counterfactual_path(
             best, minimal = minimize(current)
             return done(best, minimal)
     return done(None)
+
+
+
+def search_backward_counterfactual(
+    x: np.ndarray,
+    baseline: np.ndarray,
+    donor: np.ndarray,
+    components: Sequence,
+    removal_order: Sequence[int],
+    predict_many: Callable,
+    *,
+    target_class: int,
+    budget: int,
+    taper: int = 2,
+) -> PathSearchResult:
+    """Prune a measured full-donor patch to a smaller verified counterfactual.
+
+    Reverse-search control for a partition of disjoint temporal regions.
+    A full patch is tested first; absent a measured target switch, abstain.
+    Subsequent removals are accepted ONLY after a direct model evaluation.
+    This works with any fixed candidate set, has no test-label inputs,
+    and never claims global minimum intervention size.
+
+    A local 1-deletion minimality flag is issued only when the *final*
+    selected set has been checked against every single-component deletion
+    after the last successful deletion. Q includes the initial full patch,
+    all attempted deletions and any local-minimality confirmation calls.
+    """
+    source=np.asarray(x,dtype=float)
+    donor=np.asarray(donor,dtype=float)
+    base=np.asarray(baseline,dtype=float)
+    ordered=tuple(int(i) for i in removal_order)
+    if (source.ndim!=2 or donor.shape!=source.shape or
+        not np.isfinite(source).all() or not np.isfinite(donor).all() or
+        base.ndim!=1 or len(base)<2 or not np.isfinite(base).all()):
+        raise ValueError("finite matching [T,C] arrays and class scores required")
+    if (target_class<0 or target_class>=len(base) or
+        target_class==int(np.argmax(base)) or budget<1):
+        raise ValueError("valid fixed target distinct from source and positive Q required")
+    if (not components or len(ordered)!=len(components)
+        or set(ordered)!=set(range(len(components)))):
+        raise ValueError("removal order must be a component permutation")
+    if not isinstance(taper,int) or taper<0:
+        raise ValueError("nonnegative integer taper required")
+    probes: list[PathProbe]=[]
+    measured:dict[tuple[int,...],PathProbe]={}
+    scale=max(float(np.linalg.norm(source)),float(np.linalg.norm(donor)),1e-8)
+
+    def check(selection:tuple[int,...],stage:str) -> PathProbe|None:
+        key=tuple(sorted(selection))
+        if not key:
+            return None  # original baseline already known not to equal target
+        if key in measured:
+            return measured[key]
+        if len(probes)>=budget:
+            return None
+        edit=splice(source,donor,components,key,taper=taper)
+        output=np.asarray(predict_many(edit[None]),dtype=float)
+        if output.shape!=(1,len(base)) or not np.isfinite(output).all():
+            raise ValueError("classifier must return [1,classes] finite scores")
+        winner=int(np.argmax(output[0]))
+        result=PathProbe(
+            key,winner,target_margin(output[0],target_class),
+            winner==target_class,
+            float(np.linalg.norm(edit-source)/scale),stage
+        )
+        measured[key]=result
+        probes.append(result)
+        return result
+
+    source_class=int(np.argmax(base))
+    current=tuple(range(len(components)))
+    initial=check(current,"full_donor_seed")
+    if initial is None or not initial.targeted_flip:
+        return PathSearchResult(
+            "not_found_within_budget",source_class,target_class,None,
+            len(probes),budget,tuple(probes),False
+        )
+
+    # Try removing less-promising parts first. A successful removal changes
+    # the candidate, so all prior failed deletions must be rechecked if
+    # claiming local minimality for the final set.
+    while True:
+        removed=False
+        completed_pass=True
+        for j in ordered:
+            if j not in current:
+                continue
+            subset=tuple(k for k in current if k!=j)
+            if not subset:
+                continue  # original non-target from cached baseline
+            probe=check(subset,"remove")
+            if probe is None:
+                completed_pass=False
+                break
+            if probe.targeted_flip:
+                current=subset
+                removed=True
+                break
+        if not removed:
+            return PathSearchResult(
+                "verified_target_flip",source_class,target_class,current,
+                len(probes),budget,tuple(probes),completed_pass
+            )
+        if len(probes)>=budget:
+            return PathSearchResult(
+                "verified_target_flip",source_class,target_class,current,
+                len(probes),budget,tuple(probes),False
+            )
