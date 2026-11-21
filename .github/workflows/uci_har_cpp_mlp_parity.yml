@@ -1,0 +1,131 @@
+name: Export raw UCI HAR MLP to C++ and check FP32 forward parity
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uci_har_cpp_mlp_parity.yml'
+      - 'beaconxai/cpp_mlp_export.py'
+      - 'tests/test_cpp_mlp_export.py'
+      - 'scripts/export_raw_mlp_cpp.py'
+      - 'embedded/raw_mlp_inference.hpp'
+      - 'embedded/tests/test_exported_mlp.cpp'
+      - 'embedded/adaptive_v2_audit.hpp'
+      - 'embedded/tests/test_adaptive_v2_exported_mlp.cpp'
+      - 'embedded/tests/test_adaptive_v2_core.cpp'
+      - 'embedded/staged_adaptive_upgrade.hpp'
+      - 'embedded/tests/test_staged_adaptive_upgrade.cpp'
+      - 'embedded/tests/test_staged_exported_mlp.cpp'
+      - 'beaconxai/staged_budget.py'
+      - 'scripts/run_clean_calibrated_staged_budget.py'
+      - 'beaconxai/cpp_adaptive_v2_export.py'
+      - 'tests/test_cpp_adaptive_v2_export.py'
+      - 'embedded/dual_operator_audit.hpp'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  OMP_NUM_THREADS: '1'
+  OPENBLAS_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  VECLIB_MAXIMUM_THREADS: '1'
+  NUMEXPR_NUM_THREADS: '1'
+  PYTHONHASHSEED: '0'
+
+jobs:
+  cpp-mlp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: python -m pip install -e . pytest
+      - name: Test geometry, FP32 formatting and binary parity fixture
+        run: |
+          python -m pytest -q tests/test_cpp_mlp_export.py \
+            tests/test_cpp_adaptive_v2_export.py tests/test_resource_accounting.py
+      - name: Compile and verify baseline C++ Q16 negative controls
+        run: |
+          g++ -std=c++11 -O2 -Wall -Wextra -Werror -pedantic \
+            embedded/tests/test_adaptive_v2_core.cpp \
+            -o /tmp/beacon-adaptive-v2-core
+          /tmp/beacon-adaptive-v2-core
+      - name: Verify experimental Q16 to Q32 C++ callback cost and failures
+        run: |
+          g++ -std=c++11 -O2 -Wall -Wextra -Werror -pedantic \
+            embedded/tests/test_staged_adaptive_upgrade.cpp \
+            -o /tmp/beacon-staged-upgrade-test
+          /tmp/beacon-staged-upgrade-test
+      - name: Preprocess official UCI HAR
+        run: |
+          python scripts/preprocess_uci_har_for_q36.py \
+            --root data/uci_har --out data/uci_har_official_subjects.npz
+      - name: Fit real raw MLP and export float32 weights from training subjects
+        run: |
+          python -u scripts/export_raw_mlp_cpp.py \
+            --npz-path data/uci_har_official_subjects.npz \
+            --out-dir outputs_composite/uci_har_mlp_cpp \
+            --parity-samples 96 --seed 57 --adaptive-parity --staged-parity
+      - name: Check optional board fixture exercises a Q32 path when available
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          x=json.loads(Path('outputs_composite/uci_har_mlp_cpp/manifest.json').read_text())
+          r=x['optional_staged_q16_q32_parity']
+          assert r is not None
+          assert r['threshold_fitted_only_on_official_training_subjects']
+          assert r['frozen_board_selfcheck_expected_q']==(
+              32 if r['n_upgraded_to_q32'] else 16)
+          print('FROZEN_Q32_PATH_PRESENT_IF_AVAILABLE',r['frozen_board_selfcheck_expected_q'])
+          PY
+      - name: Compile and test C++11 MLP numeric parity and Q16 callback
+        run: |
+          g++ -std=c++11 -O2 -Wall -Wextra -Werror -pedantic \
+            -Ioutputs_composite/uci_har_mlp_cpp \
+            embedded/tests/test_exported_mlp.cpp -o /tmp/beacon-raw-mlp-parity
+          /tmp/beacon-raw-mlp-parity \
+            outputs_composite/uci_har_mlp_cpp/model_parity_f32.bin
+      - name: Verify original adaptive_v2 Q16 candidate set and ranking in C++
+        run: |
+          g++ -std=c++11 -O2 -Wall -Wextra -Werror -pedantic \
+            -Ioutputs_composite/uci_har_mlp_cpp \
+            embedded/tests/test_adaptive_v2_exported_mlp.cpp \
+            -o /tmp/beacon-adaptive-v2-parity
+          /tmp/beacon-adaptive-v2-parity \
+            outputs_composite/uci_har_mlp_cpp/adaptive_v2_q16_parity.bin
+      - name: Verify train-only Q16 to Q32 staged model-call parity in C++
+        run: |
+          g++ -std=c++11 -O2 -Wall -Wextra -Werror -pedantic \
+            -Ioutputs_composite/uci_har_mlp_cpp \
+            embedded/tests/test_staged_exported_mlp.cpp \
+            -o /tmp/beacon-staged-exported-parity
+          /tmp/beacon-staged-exported-parity \
+            outputs_composite/uci_har_mlp_cpp/staged_q16_q32_parity.bin
+      - name: Provenance
+        if: always()
+        run: |
+          mkdir -p outputs_composite/uci_har_mlp_cpp
+          {
+            git rev-parse HEAD
+            python --version
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pytest'
+            if test -f data/uci_har_official_subjects.npz; then sha256sum data/uci_har_official_subjects.npz; fi
+          } > outputs_composite/uci_har_mlp_cpp/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: uci-har-f32-mlp-cpp-parity
+          path: outputs_composite/uci_har_mlp_cpp/
+          retention-days: 30
+          if-no-files-found: warn

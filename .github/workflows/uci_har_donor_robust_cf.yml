@@ -1,0 +1,78 @@
+name: BEACON finite-donor robust counterfactual Q8 Q16
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uci_har_donor_robust_cf.yml'
+      - 'beaconxai/donor_robust_cf.py'
+      - 'beaconxai/donor_selection.py'
+      - 'tests/test_donor_selection.py'
+      - 'tests/test_donor_robust_cf.py'
+      - 'scripts/run_donor_robust_cf_benchmark.py'
+      - 'tests/test_donor_robust_cf_benchmark.py'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  PYTHONHASHSEED: '0'
+
+jobs:
+  robust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        model: [raw_mlp, extratrees]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install project/test dependencies
+        run: python -m pip install -e . pytest matplotlib
+      - name: Test donor robustness, abstention, budget and subject macros
+        run: |
+          python -m pytest -q tests/test_donor_selection.py \
+            tests/test_donor_robust_cf.py \
+            tests/test_donor_robust_cf_benchmark.py \
+            tests/test_cf_path_search.py tests/test_physical_groups.py
+      - name: Prepare original subject-disjoint UCI HAR
+        run: |
+          python scripts/preprocess_uci_har_for_q36.py \
+            --root data/uci_har --out data/uci_har_official_subjects.npz
+      - name: Compare Q8/Q16 on one frozen model and same three donors
+        run: |
+          python -u scripts/run_donor_robust_cf_benchmark.py \
+            --npz-path data/uci_har_official_subjects.npz \
+            --out-dir outputs_composite/donor_robust_${{ matrix.model }} \
+            --model ${{ matrix.model }} --budgets 8,16 \
+            --max-test 180 --seed 57 --reserve 2 --donors 8
+      - name: Preserve provenance
+        if: always()
+        run: |
+          mkdir -p outputs_composite/donor_robust_${{ matrix.model }}
+          {
+            git rev-parse HEAD
+            python --version
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pandas|pytest'
+            if test -f data/uci_har_official_subjects.npz; then sha256sum data/uci_har_official_subjects.npz; fi
+          } > outputs_composite/donor_robust_${{ matrix.model }}/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: donor-robust-${{ matrix.model }}
+          path: outputs_composite/donor_robust_${{ matrix.model }}/
+          retention-days: 30
+          if-no-files-found: warn

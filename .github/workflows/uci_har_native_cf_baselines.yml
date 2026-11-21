@@ -1,0 +1,80 @@
+name: BEACON native MultiSubSpaCE exact model-query pilot
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uci_har_native_cf_baselines.yml'
+      - 'beaconxai/native_cf_budget.py'
+      - 'scripts/run_native_cf_baselines.py'
+      - 'tests/test_native_cf_budget.py'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  PYTHONHASHSEED: '0'
+
+jobs:
+  actual-upstream:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        model: [raw_mlp, extratrees]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install main project and test dependencies
+        run: |
+          python -m pip install -e . pytest matplotlib 'numpy<2'
+          python -m pytest -q tests/test_native_cf_budget.py
+      - name: Checkout authentic upstream reference at immutable commit
+        run: |
+          git clone --depth 1 https://github.com/MarioRefoyo/FastPACE.git third_party/FastPACE
+          test "$(git -C third_party/FastPACE rev-parse HEAD)" = "4bbeae86bbc6ad02f7ee79fb550c9866682f6deb"
+          test -f third_party/FastPACE/methods/MultiSubSpaCECF.py
+          test -f third_party/FastPACE/methods/MultiSubSpaCE/MOEvolutionaryOptimizers.py
+      - name: Prepare official UCI HAR subject-disjoint windows
+        run: |
+          python scripts/preprocess_uci_har_for_q36.py \
+            --root data/uci_har --out data/uci_har_official_subjects.npz
+      - name: Run actual MultiSubSpaCE source and matched BEACON at Q8 Q16
+        run: |
+          python -u scripts/run_native_cf_baselines.py \
+            --npz-path data/uci_har_official_subjects.npz \
+            --upstream third_party/FastPACE \
+            --out-dir outputs_composite/native_cf_${{ matrix.model }} \
+            --model ${{ matrix.model }} --budgets 8,16 \
+            --max-test 48 --donors 8 --seed 57
+      - name: Reproducibility receipt
+        if: always()
+        run: |
+          mkdir -p outputs_composite/native_cf_${{ matrix.model }}
+          {
+            git rev-parse HEAD
+            if test -d third_party/FastPACE/.git; then git -C third_party/FastPACE rev-parse HEAD; fi
+            python --version
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pandas|pytest'
+            if test -f data/uci_har_official_subjects.npz; then sha256sum data/uci_har_official_subjects.npz; fi
+          } > outputs_composite/native_cf_${{ matrix.model }}/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-cf-${{ matrix.model }}
+          path: outputs_composite/native_cf_${{ matrix.model }}/
+          retention-days: 30
+          if-no-files-found: warn

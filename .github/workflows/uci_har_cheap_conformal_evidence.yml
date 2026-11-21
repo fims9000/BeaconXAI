@@ -1,0 +1,81 @@
+name: BEACON cheap mathematical explanations and subject-block certificates
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uci_har_cheap_conformal_evidence.yml'
+      - 'beaconxai/conformal_evidence.py'
+      - 'scripts/run_cheap_conformal_explanations.py'
+      - 'tests/test_conformal_evidence.py'
+      - 'tests/test_cheap_conformal_explanations.py'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  OMP_NUM_THREADS: '1'
+  OPENBLAS_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  VECLIB_MAXIMUM_THREADS: '1'
+  NUMEXPR_NUM_THREADS: '1'
+  PYTHONHASHSEED: '0'
+
+jobs:
+  mathematical-subject-block-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        model: [raw_mlp, extratrees]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install only project and test dependencies
+        run: python -m pip install -e . pytest
+      - name: Prove subject-conformal logic and no test-label leakage
+        run: |
+          python -m pytest -q tests/test_conformal_evidence.py \
+            tests/test_cheap_conformal_explanations.py
+      - name: Prepare official subject-separated UCI HAR dataset
+        run: |
+          python scripts/preprocess_uci_har_for_q36.py \
+            --root data/uci_har \
+            --out data/uci_har_official_subjects.npz
+      - name: Compare cheap effect surrogate and Q16 against offline Q36
+        run: |
+          python -u scripts/run_cheap_conformal_explanations.py \
+            --npz-path data/uci_har_official_subjects.npz \
+            --out-dir outputs_composite/math_cheap_${{ matrix.model }} \
+            --model ${{ matrix.model }} \
+            --alpha 0.2 --windows-per-subject 6 \
+            --max-queries 16 --ridge-alpha 100 --seed 57
+      - name: Preserve model/environment provenance
+        if: always()
+        run: |
+          mkdir -p outputs_composite/math_cheap_${{ matrix.model }}
+          {
+            git rev-parse HEAD
+            python --version
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pytest'
+            if test -f data/uci_har_official_subjects.npz; then
+              sha256sum data/uci_har_official_subjects.npz
+            fi
+          } > outputs_composite/math_cheap_${{ matrix.model }}/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mathematical-cheap-evidence-${{ matrix.model }}
+          path: outputs_composite/math_cheap_${{ matrix.model }}/
+          retention-days: 30
+          if-no-files-found: warn

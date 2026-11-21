@@ -1,0 +1,89 @@
+name: PAMAP2 Q16 experimental benchmark
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/pamap2_q16_research.yml'
+      - 'scripts/run_contrastive_q16.py'
+      - 'beaconxai/contrastive.py'
+      - 'tests/test_contrastive.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pamap2-q16:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - name: Checkout exact research commit
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install minimal dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest
+
+      - name: Validate code before downloading data
+        run: |
+          python -m pytest tests/test_contrastive.py -q
+          python scripts/run_contrastive_q16.py --smoke
+
+      - name: Prepare official PAMAP2 (subjects 8 and 9 held out)
+        run: |
+          python scripts/preprocess_pamap2.py \
+            --data-root data \
+            --window-length 200 \
+            --step 100 \
+            --min-purity 0.95 \
+            --test-subjects 8,9 \
+            --out data/pamap2_acc9_w200s100_p095.npz
+
+      - name: Experiment - equal 16 extra calls, 36 components, 3 random seeds
+        run: |
+          python -u scripts/run_contrastive_q16.py \
+            --mode both \
+            --time-bins 12 \
+            --group-mode pamap3 \
+            --budget 16 \
+            --max-test 128 \
+            --repeats 3 \
+            --seed 42 \
+            --out-dir outputs_composite/contrastive_q16
+
+      - name: Record experiment manifest
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p outputs_composite/contrastive_q16
+          {
+            echo 'commit:'
+            git rev-parse HEAD
+            echo 'python:'
+            python --version
+            echo 'dependencies:'
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pandas|pytest'
+            echo 'dataset (if prepared):'
+            if test -f data/pamap2_acc9_w200s100_p095.npz; then
+              sha256sum data/pamap2_acc9_w200s100_p095.npz
+            else
+              echo 'Dataset preparation was not completed'
+            fi
+          } > outputs_composite/contrastive_q16/provenance.txt
+
+      - name: Upload compact research outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pamap2-q16-experiment
+          path: outputs_composite/contrastive_q16/
+          if-no-files-found: warn
+          retention-days: 30

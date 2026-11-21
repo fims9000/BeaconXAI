@@ -1,0 +1,84 @@
+name: BEACON Q8 Q16 independent UEA BasicMotions controls
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uea_basicmotions_cf.yml'
+      - 'scripts/preprocess_uea_basicmotions.py'
+      - 'scripts/run_uea_basicmotions_cf.py'
+      - 'beaconxai/cf_donor_line.py'
+      - 'tests/test_uea_basicmotions_cf.py'
+      - 'scripts/run_native_cf_baselines.py'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  PYTHONHASHSEED: '0'
+
+jobs:
+  independent-corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        model: [raw_mlp, extratrees]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install reproducible corpus and baseline dependencies
+        run: |
+          python -m pip install -e . pytest matplotlib aeon==1.5.0
+      - name: Verify new corpus and line search invariants
+        run: |
+          python -m pytest -q tests/test_uea_basicmotions_cf.py \
+            tests/test_native_cf_budget.py tests/test_cf_path_search.py
+      - name: Check authentic MultiSubSpaCE source revision
+        run: |
+          git clone --depth 1 https://github.com/MarioRefoyo/FastPACE.git third_party/FastPACE
+          test "$(git -C third_party/FastPACE rev-parse HEAD)" = "4bbeae86bbc6ad02f7ee79fb550c9866682f6deb"
+      - name: Prepare only official UEA BasicMotions train and test
+        run: |
+          python scripts/preprocess_uea_basicmotions.py \
+            --out data/uea_basicmotions_official.npz
+      - name: Execute matched Q8/Q16 comparison, no invented sensor constraints
+        run: |
+          python -u scripts/run_uea_basicmotions_cf.py \
+            --npz-path data/uea_basicmotions_official.npz \
+            --upstream third_party/FastPACE \
+            --out-dir outputs_composite/uea_basicmotions_${{ matrix.model }} \
+            --model ${{ matrix.model }} --budgets 8,16 \
+            --max-test 40 --seed 57 --donors 8 \
+            --max-changed 8 --max-extended 16 --offline-prefix
+      - name: Preserve model, data and dependency provenance
+        if: always()
+        run: |
+          mkdir -p outputs_composite/uea_basicmotions_${{ matrix.model }}
+          {
+            git rev-parse HEAD
+            if test -d third_party/FastPACE/.git; then git -C third_party/FastPACE rev-parse HEAD; fi
+            python --version
+            python -m pip freeze | grep -E 'aeon|numpy|scikit-learn|scipy|pandas|pytest'
+            if test -f data/uea_basicmotions_official.npz; then sha256sum data/uea_basicmotions_official.npz; fi
+          } > outputs_composite/uea_basicmotions_${{ matrix.model }}/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: uea-basicmotions-${{ matrix.model }}
+          path: outputs_composite/uea_basicmotions_${{ matrix.model }}/
+          retention-days: 30
+          if-no-files-found: warn

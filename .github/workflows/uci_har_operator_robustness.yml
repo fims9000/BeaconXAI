@@ -1,0 +1,78 @@
+name: UCI HAR robustness to interpolation vs real-class-medoid operator
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uci_har_operator_robustness.yml'
+      - 'scripts/run_operator_robustness.py'
+      - 'tests/test_operator_robustness.py'
+      - 'beaconxai/dual_operator_audit.py'
+      - 'beaconxai/dual_operator_metrics.py'
+      - 'tests/test_dual_operator_audit.py'
+      - 'tests/test_dual_operator_metrics.py'
+      - 'beaconxai/model_quality.py'
+      - 'tests/test_model_quality.py'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  operators:
+    runs-on: ubuntu-latest
+    timeout-minutes: 115
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - model: extratrees
+            n_windows: 64
+          - model: raw_mlp
+            n_windows: 32
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install package and test suite
+        run: python -m pip install -e . pytest
+      - name: Verify train medoid, oracle isolation and call accounting
+        run: |
+          python -m pytest -q tests/test_operator_robustness.py \
+            tests/test_dual_operator_audit.py tests/test_dual_operator_metrics.py \
+            tests/test_model_quality.py tests/test_real_donor.py tests/test_preprocess_uci_har.py
+      - name: Prepare official UCI HAR subjects
+        run: |
+          python scripts/preprocess_uci_har_for_q36.py \
+            --root data/uci_har --out data/uci_har_official_subjects.npz
+      - name: Compare two full Q36 operators and their Q16 surrogates
+        run: |
+          python -u scripts/run_operator_robustness.py \
+            --npz-path data/uci_har_official_subjects.npz \
+            --out-dir outputs_composite/uci_har_operator_${{ matrix.model }} \
+            --dataset UCI_HAR --model ${{ matrix.model }} \
+            --max-test ${{ matrix.n_windows }} --budget 16 --seed 57
+      - name: Provenance
+        if: always()
+        run: |
+          mkdir -p outputs_composite/uci_har_operator_${{ matrix.model }}
+          {
+            git rev-parse HEAD
+            python --version
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pytest'
+            if test -f data/uci_har_official_subjects.npz; then sha256sum data/uci_har_official_subjects.npz; fi
+          } > outputs_composite/uci_har_operator_${{ matrix.model }}/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: uci-har-operator-${{ matrix.model }}
+          path: outputs_composite/uci_har_operator_${{ matrix.model }}/
+          retention-days: 30
+          if-no-files-found: warn

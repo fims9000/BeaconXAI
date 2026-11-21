@@ -1,0 +1,75 @@
+name: BEACON preregistered Epilepsy two-donor Q16 holdout
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uea_epilepsy_robust_q16.yml'
+      - 'scripts/preprocess_uea_epilepsy.py'
+      - 'scripts/run_uea_epilepsy_robust_q16.py'
+      - 'beaconxai/donor_robust_cf.py'
+      - 'tests/test_donor_robust_cf.py'
+      - 'tests/test_uea_epilepsy_robust_q16.py'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  PYTHONHASHSEED: '0'
+
+jobs:
+  frozen-epilepsy-joint-q16:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install frozen archive and project requirements
+        run: |
+          python -m pip install -e . pytest matplotlib aeon==1.5.0
+      - name: Verify shared budget, conservative certification and source isolation
+        run: |
+          python -m pytest -q \
+            tests/test_uea_epilepsy_robust_q16.py \
+            tests/test_donor_robust_cf.py \
+            tests/test_cf_path_search.py \
+            tests/test_uea_racketsports_holdout.py
+      - name: Retrieve untouched UEA Epilepsy official split
+        run: |
+          python scripts/preprocess_uea_epilepsy.py \
+            --out data/uea_epilepsy_official.npz
+      - name: Run preregistered two-donor comparison with global Q16
+        run: |
+          python -u scripts/run_uea_epilepsy_robust_q16.py \
+            --npz-path data/uea_epilepsy_official.npz \
+            --out-dir outputs_composite/epilepsy_robust_q16 \
+            --seed 57 --trees 120 --donors 16
+      - name: Store provenance
+        if: always()
+        run: |
+          mkdir -p outputs_composite/epilepsy_robust_q16
+          {
+            git rev-parse HEAD
+            git rev-parse 9bcd46e4eedb69c11419a25711b038629daab87e
+            python --version
+            python -m pip freeze | grep -E 'aeon|numpy|scikit-learn|scipy|pandas|pytest'
+            if test -f data/uea_epilepsy_official.npz; then sha256sum data/uea_epilepsy_official.npz; fi
+          } > outputs_composite/epilepsy_robust_q16/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: preregistered-epilepsy-joint-q16
+          path: outputs_composite/epilepsy_robust_q16/
+          retention-days: 90
+          if-no-files-found: warn

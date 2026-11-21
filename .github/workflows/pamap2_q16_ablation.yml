@@ -1,0 +1,100 @@
+name: PAMAP2 Q16 matched ablation
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/pamap2_q16_ablation.yml'
+      - 'scripts/run_q16_matched_ablation.py'
+      - 'tests/test_q16_matched_ablation.py'
+      - 'beaconxai/subject_sampling.py'
+      - 'tests/test_subject_sampling.py'
+      - 'scripts/preprocess_pamap2.py'
+      - 'tests/test_pamap2_download.py'
+      - 'beaconxai/candidate_selection.py'
+      - 'tests/test_candidate_selection.py'
+      - 'beaconxai/patch_diagnostics.py'
+      - 'tests/test_patch_diagnostics.py'
+      - 'beaconxai/rank_fusion.py'
+      - 'tests/test_rank_fusion.py'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  matched-q16:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - heldout: '8,9'
+            tag: 's8s9'
+          - heldout: '6,7'
+            tag: 's6s7'
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install package and pytest
+        run: |
+          python -m pip install -e . pytest
+
+      - name: Validate matched protocol and previous contrastive tests
+        run: |
+          python -m pytest -q tests/test_q16_matched_ablation.py tests/test_contrastive.py tests/test_subject_sampling.py tests/test_rank_fusion.py tests/test_candidate_selection.py tests/test_pamap2_download.py tests/test_patch_diagnostics.py
+
+      - name: Prepare PAMAP2 for held-out subjects
+        run: |
+          python scripts/preprocess_pamap2.py \
+            --data-root data \
+            --window-length 200 \
+            --step 100 \
+            --min-purity 0.95 \
+            --test-subjects '${{ matrix.heldout }}' \
+            --out data/pamap2_${{ matrix.tag }}.npz
+
+      - name: Run 36-component matched Q16 ablation
+        run: |
+          python -u scripts/run_q16_matched_ablation.py \
+            --npz-path data/pamap2_${{ matrix.tag }}.npz \
+            --time-bins 12 \
+            --budget 16 \
+            --max-test 128 \
+            --repeats 3 \
+            --seed 42 \
+            --out-dir outputs_composite/q16_matched_${{ matrix.tag }}
+
+      - name: Write provenance
+        if: always()
+        run: |
+          mkdir -p outputs_composite/q16_matched_${{ matrix.tag }}
+          {
+            echo "commit: $(git rev-parse HEAD)"
+            python --version
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pandas|pytest'
+            if test -f data/pamap2_${{ matrix.tag }}.npz; then sha256sum data/pamap2_${{ matrix.tag }}.npz; fi
+          } > outputs_composite/q16_matched_${{ matrix.tag }}/provenance.txt
+
+      - name: Upload complete experiment tables
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pamap2-q16-matched-${{ matrix.tag }}
+          path: outputs_composite/q16_matched_${{ matrix.tag }}/
+          if-no-files-found: warn
+          retention-days: 30

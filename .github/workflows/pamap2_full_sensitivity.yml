@@ -1,0 +1,81 @@
+name: PAMAP2 clean-signal full-Q36 sensitivity reference
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/pamap2_full_sensitivity.yml'
+      - 'scripts/run_full_sensitivity_reference.py'
+      - 'beaconxai/sensitivity_reference.py'
+      - 'tests/test_sensitivity_reference.py'
+      - 'tests/test_full_sensitivity_reference.py'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  full-reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - heldout: '1'
+            tag: s1
+          - heldout: '2,3'
+            tag: s2s3
+          - heldout: '4,5'
+            tag: s4s5
+          - heldout: '6,7'
+            tag: s6s7
+          - heldout: '8,9'
+            tag: s8s9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install project and test runtime
+        run: python -m pip install -e . pytest
+      - name: Tests for clean reference, labels and Q accounting
+        run: |
+          python -m pytest -q tests/test_sensitivity_reference.py \
+            tests/test_full_sensitivity_reference.py tests/test_q16_matched_ablation.py \
+            tests/test_patch_diagnostics.py
+      - name: Prepare official held-out subject fold
+        run: |
+          python scripts/preprocess_pamap2.py \
+            --data-root data --window-length 200 --step 100 \
+            --min-purity 0.95 --test-subjects '${{ matrix.heldout }}' \
+            --out data/pamap2_${{ matrix.tag }}.npz
+      - name: Run full Q36 reference and fixed-budget Q0/Q16 comparators
+        run: |
+          python -u scripts/run_full_sensitivity_reference.py \
+            --npz-path data/pamap2_${{ matrix.tag }}.npz \
+            --out-dir outputs_composite/full_sensitivity_${{ matrix.tag }} \
+            --max-test 128 --time-bins 12 --budget 16 --seed 57
+      - name: Record exact commit and dataset checksums
+        if: always()
+        run: |
+          mkdir -p outputs_composite/full_sensitivity_${{ matrix.tag }}
+          {
+            git rev-parse HEAD
+            python --version
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pandas|pytest'
+            if test -f data/pamap2_${{ matrix.tag }}.npz; then sha256sum data/pamap2_${{ matrix.tag }}.npz; fi
+          } > outputs_composite/full_sensitivity_${{ matrix.tag }}/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: clean-q36-reference-${{ matrix.tag }}
+          path: outputs_composite/full_sensitivity_${{ matrix.tag }}/
+          if-no-files-found: warn
+          retention-days: 30

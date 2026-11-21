@@ -1,0 +1,75 @@
+name: PAMAP2 class-prototype explanation atlas
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/pamap2_class_counterfactual.yml'
+      - 'beaconxai/class_counterfactual.py'
+      - 'scripts/run_class_counterfactual_atlas.py'
+      - 'tests/test_class_counterfactual.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  class-atlas:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - heldout: '2,3'
+            tag: 's2s3'
+          - heldout: '6,7'
+            tag: 's6s7'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install packages
+        run: python -m pip install -e . pytest matplotlib
+      - name: Test complete explanation pipeline
+        run: |
+          python -m pytest -q tests/test_class_counterfactual.py \
+            tests/test_contrastive.py tests/test_q16_matched_ablation.py
+      - name: Prepare independent held-out PAMAP2 subjects
+        run: |
+          python scripts/preprocess_pamap2.py \
+            --data-root data --window-length 200 --step 100 \
+            --min-purity 0.95 --test-subjects '${{ matrix.heldout }}' \
+            --out data/pamap2_${{ matrix.tag }}.npz
+      - name: Explain correct held-out examples for every available source class
+        run: |
+          python -u scripts/run_class_counterfactual_atlas.py \
+            --npz-path data/pamap2_${{ matrix.tag }}.npz \
+            --max-test 0 --max-examples-per-class 2 \
+            --time-bins 12 --budget 16 --prototype-mode both \
+            --rival-mode all --taper 2 \
+            --out-dir outputs_composite/class_atlas_${{ matrix.tag }}
+      - name: Save reproducibility metadata
+        if: always()
+        run: |
+          mkdir -p outputs_composite/class_atlas_${{ matrix.tag }}
+          {
+            echo 'Source commit:'
+            git rev-parse HEAD
+            echo 'Python:'
+            python --version
+            echo 'Dependencies:'
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pandas|matplotlib'
+            echo 'Dataset checksum:'
+            if test -f data/pamap2_${{ matrix.tag }}.npz; then sha256sum data/pamap2_${{ matrix.tag }}.npz; fi
+          } > outputs_composite/class_atlas_${{ matrix.tag }}/provenance.txt
+      - name: Upload figures, CSV, and class explanations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pamap2-class-atlas-${{ matrix.tag }}
+          path: outputs_composite/class_atlas_${{ matrix.tag }}/
+          if-no-files-found: warn
+          retention-days: 30

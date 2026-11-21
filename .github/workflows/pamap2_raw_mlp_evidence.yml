@@ -1,0 +1,63 @@
+name: PAMAP2 raw-input MLP evidence replication
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/pamap2_raw_mlp_evidence.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  raw-mlp-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - heldout: '2,3'
+            tag: s2s3
+          - heldout: '6,7'
+            tag: s6s7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install package and pytest
+        run: python -m pip install -e . pytest
+      - name: Check evidence and donor invariants
+        run: python -m pytest -q tests/test_evidence_consensus.py tests/test_real_donor.py
+      - name: Prepare PAMAP2 held-out subjects
+        run: |
+          python scripts/preprocess_pamap2.py \
+            --data-root data --window-length 200 --step 100 \
+            --min-purity 0.95 --test-subjects '${{ matrix.heldout }}' \
+            --out data/pamap2_${{ matrix.tag }}.npz
+      - name: Train raw-input MLP and evaluate donor resampling evidence
+        run: |
+          python -u scripts/run_evidence_consensus_benchmark.py \
+            --npz-path data/pamap2_${{ matrix.tag }}.npz \
+            --out-dir outputs_composite/raw_mlp_evidence_${{ matrix.tag }} \
+            --model raw_mlp --max-samples 60 --max-donors 64 \
+            --replicates 4 --reference-donors 8 --epsilon 0.01 --seed 42
+      - name: Record reproducibility evidence
+        if: always()
+        run: |
+          mkdir -p outputs_composite/raw_mlp_evidence_${{ matrix.tag }}
+          {
+            git rev-parse HEAD
+            python --version
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pytest'
+          } > outputs_composite/raw_mlp_evidence_${{ matrix.tag }}/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: raw-mlp-evidence-${{ matrix.tag }}
+          path: outputs_composite/raw_mlp_evidence_${{ matrix.tag }}/
+          if-no-files-found: warn
+          retention-days: 30
