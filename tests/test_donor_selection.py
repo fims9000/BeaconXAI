@@ -15,7 +15,7 @@ def test_farthest_first_starts_at_fixed_anchor_and_covers_outliers():
 def test_only_bank_derived_geometry_no_model_calls():
     bank = [np.ones((4,2))*v for v in (3., 9., -2., 2.)]
     assert farthest_first_donors(bank, 0, 1) == (0,)
-    assert farthest_first_donors(bank, 0, 4) == (0,2,1,3)
+    assert farthest_first_donors(bank, 0, 4) == (0,1,2,3)
 
 
 def test_rejects_invalid_bank_indices_and_nan():
