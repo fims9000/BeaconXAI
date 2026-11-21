@@ -156,6 +156,8 @@ def run(args):
     bank=fit_real_donor_bank(
         train,y_train,comps,max_donors=args.donors,seed=args.seed+10
     )
+    if args.max_test < len(np.unique(sid_test)):
+        raise ValueError("max-test must cover each subject (>=9 for official UCI HAR)")
     chosen=balanced_subject_sample(sid_test,args.max_test,args.seed+301)
     test=apply_standardizer(raw_test[chosen],mu,sd)
     base=model(test)
@@ -284,7 +286,7 @@ def main():
     p.add_argument("--model",choices=("raw_mlp","extratrees"),default="raw_mlp")
     p.add_argument("--query-caps",default="16,2048")
     p.add_argument("--max-plan-calls",type=int,default=1)
-    p.add_argument("--max-test",type=int,default=3)
+    p.add_argument("--max-test",type=int,default=9)
     p.add_argument("--donors",type=int,default=8)
     p.add_argument("--seed",type=int,default=57)
     p.add_argument("--trees",type=int,default=120)
