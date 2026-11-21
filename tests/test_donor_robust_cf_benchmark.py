@@ -19,6 +19,7 @@ def row(subject, method, certified, direct, calls=8, minimal=False):
         "withheld_n_flipped": 5 if certified else 0,
         "withheld_flip_fraction": 1.0 if certified else None,
         "withheld_all_flipped": int(certified),
+        "selected_donors_cover_radius": 1.0,
     }
 
 
@@ -34,6 +35,7 @@ def test_subject_macro_is_not_window_weighted():
     assert s["locally_minimal_and_three_donors"] == 9
     assert s["n_certified_surviving_all_unseen_training_donors"] == 9
     assert s["mean_withheld_flip_fraction_given_certified"] == 1.0
+    assert s["mean_train_bank_cover_radius"] == 1.0
 
 
 def test_zero_certificates_are_explicit_abstentions():
