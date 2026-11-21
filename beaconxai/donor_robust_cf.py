@@ -337,6 +337,41 @@ def search_backward_robust_counterfactual(
     return done(current, minimal=len(current) == 1)
 
 
+
+
+def _disjoint_support_counts(
+    source: np.ndarray,
+    pool: tuple[np.ndarray,...],
+    components: Sequence,
+    taper: int,
+) -> np.ndarray | None:
+    """Return exact edited-coordinate counts for disjoint ordinary regions.
+
+    Because splice builds every nonoverlapping edit from the *same* original
+    x and the same donor, the union size is additive. Refuse this shortcut
+    for linked/overlapping/unknown component geometry; caller falls back to
+    direct splice, keeping intervention semantics unchanged.
+    """
+    occupied=np.zeros(source.shape,dtype=bool)
+    for c in components:
+        if (hasattr(c,"regions") or getattr(c,"preserve_gravity",False)
+            or not all(hasattr(c,k) for k in ("t0","t1","c0","c1"))):
+            return None
+        t0,t1,c0,c1=int(c.t0),int(c.t1),int(c.c0),int(c.c1)
+        if not (0<=t0<t1<=len(source) and 0<=c0<c1<=source.shape[1]):
+            return None
+        area=np.s_[t0:t1,c0:c1]
+        if np.any(occupied[area]):
+            return None
+        occupied[area]=True
+    counts=np.empty((len(pool),len(components)),dtype=np.int64)
+    for d_idx,donor in enumerate(pool):
+        for j in range(len(components)):
+            edited=splice(source,donor,components,(j,),taper=taper)
+            counts[d_idx,j]=np.count_nonzero(np.abs(edited-source)>1e-8)
+    return counts
+
+
 def search_sparse_robust_counterfactual(
     x: np.ndarray,
     baseline_scores: np.ndarray,
@@ -393,7 +428,14 @@ def search_sparse_robust_counterfactual(
     exhausted=False
     ever_flip=False
 
+    disjoint_counts=_disjoint_support_counts(source,pool,components,taper)
+
     def within_support(mask:tuple[int,...]) -> bool:
+        if disjoint_counts is not None:
+            # Exact, because only nonoverlapping ordinary regions use this.
+            # Divide as in the original np.mean(boolean) predicate.
+            support=np.sum(disjoint_counts[:,list(mask)],axis=1)/source.size
+            return bool(np.all(support<=maximum_modified_fraction))
         return all(
             np.mean(np.abs(splice(source,d,components,mask,taper=taper)-source)>1e-8)
             <=maximum_modified_fraction
