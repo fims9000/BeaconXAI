@@ -38,14 +38,14 @@ UPSTREAM_SHA = "4bbeae86bbc6ad02f7ee79fb550c9866682f6deb"
 
 
 def run_native(x, donor, target, model, scorer, q, seed, native_type,
-               *, gravity_normalizer=None):
+               *, gravity_normalizer=None, n_classes=6):
     if gravity_normalizer is None:
-        wrapper = CountedCFModel(model, x.shape, n_classes=6, budget=q)
+        wrapper = CountedCFModel(model, x.shape, n_classes=n_classes, budget=q)
         objective_scorer = scorer
     else:
         mu, sd = gravity_normalizer
         wrapper = ProjectedCFModel(
-            model, x, mu, sd, n_classes=6, budget=q)
+            model, x, mu, sd, n_classes=n_classes, budget=q)
         objective_scorer = ProjectedTrainingOutlier(
             scorer, wrapper.projector)
     pop = {8: 2, 16: 4}[q]
