@@ -1,0 +1,78 @@
+name: BEACON authentic FastPACE HCEM full planning cost profile
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uci_har_fastpace_fullplan_profile.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  PYTHONHASHSEED: '0'
+
+jobs:
+  full-hcem-cost:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        model: [raw_mlp, extratrees]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install project and native inference dependencies
+        run: |
+          python -m pip install -e . pytest matplotlib 'numpy<2'
+          python -m pytest -q tests/test_native_fastpace_meter.py
+          python -m pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install stable-baselines3==2.6.0 gymnasium==1.1.1
+      - name: Pin real upstream CEM code
+        run: |
+          git clone --depth 1 https://github.com/MarioRefoyo/FastPACE.git third_party/FastPACE
+          test "$(git -C third_party/FastPACE rev-parse HEAD)" = "4bbeae86bbc6ad02f7ee79fb550c9866682f6deb"
+      - name: Prepare official UCI HAR subjects
+        run: |
+          python scripts/preprocess_uci_har_for_q36.py \
+            --root data/uci_har --out data/uci_har_official_subjects.npz
+      - name: Profile 50-plan-step native FastPACE on a predeclared test subject
+        run: |
+          python -u scripts/run_native_fastpace_query_probe.py \
+            --npz-path data/uci_har_official_subjects.npz \
+            --upstream third_party/FastPACE \
+            --out-dir outputs_composite/fastpace_fullplan_${{ matrix.model }} \
+            --model ${{ matrix.model }} --query-caps 16,20000 \
+            --max-plan-calls 50 --max-test 9 \
+            --profile-subject 2 --seed 57 --beacon-reference
+      - name: Store exact versions and evidence
+        if: always()
+        run: |
+          mkdir -p outputs_composite/fastpace_fullplan_${{ matrix.model }}
+          {
+            git rev-parse HEAD
+            if test -d third_party/FastPACE/.git; then git -C third_party/FastPACE rev-parse HEAD; fi
+            python --version
+            python -m pip freeze | grep -E 'torch|stable-baselines3|gymnasium|numpy|scikit-learn|pytest'
+            if test -f data/uci_har_official_subjects.npz; then sha256sum data/uci_har_official_subjects.npz; fi
+          } > outputs_composite/fastpace_fullplan_${{ matrix.model }}/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fastpace-fullplan-${{ matrix.model }}
+          path: outputs_composite/fastpace_fullplan_${{ matrix.model }}/
+          retention-days: 30
+          if-no-files-found: warn
