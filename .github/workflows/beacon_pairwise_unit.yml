@@ -1,0 +1,28 @@
+name: BEACON learned interaction unit and regression tests
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/beacon_pairwise_unit.yml'
+      - 'beaconxai/learned_interactions.py'
+      - 'tests/test_learned_interactions.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  focused:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install -e . pytest
+          python -m pytest -q tests/test_learned_interactions.py \
+            tests/test_donor_robust_cf.py tests/test_uea_natops_sparse_q16.py
