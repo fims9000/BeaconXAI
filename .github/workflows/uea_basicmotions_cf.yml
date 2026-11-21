@@ -42,7 +42,7 @@ jobs:
           python-version: '3.11'
       - name: Install reproducible corpus and baseline dependencies
         run: |
-          python -m pip install -e . pytest matplotlib 'numpy<2' aeon==1.5.0
+          python -m pip install -e . pytest matplotlib aeon==1.5.0
       - name: Verify new corpus and line search invariants
         run: |
           python -m pytest -q tests/test_uea_basicmotions_cf.py \
