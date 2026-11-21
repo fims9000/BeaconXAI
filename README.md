@@ -7,6 +7,20 @@ Repository scope: two companion studies.
 - **Part 1**: component localization (counter-evidence shortlisting, low budget).
 - **Part 2**: risk auditing with adaptive budget (early stopping) and edge-server feasibility.
 
+## Research update: verified counterfactuals under shared Q8/Q16 (November 2026)
+
+The historical `v12-final` tag and the two original studies above are unchanged. The **draft research branch** adds a third experimental track: budget-exact finite-donor counterfactual certificates for time-series classifiers.
+
+- **Complete cross-dataset scientific status:** [counterfactual research summary](artifacts/beacon_counterfactual_research_status_2026-11-22.md). Contains the verified NATOPS, UWaveGestureLibrary, PenDigits, Epilepsy and RacketSports numbers, model accuracies, exact McNemar comparisons, failed hypotheses and TRAIN-only overhead.
+- NATOPS ExtraTrees: compact two-donor certificates at Q16 **67/180 vs 51/180** against a strong forward control (paired p=0.00249). This is a conditional operator-dependent result, not universal BEACON superiority.
+- UWave ExtraTrees: adaptive pair model **160/320 vs 141/320** static (p=0.0183), but **classifier accuracy only 62.2%**; additive adaptive is higher at 175/320.
+- PenDigits raw MLP: additive adaptive **257/320 vs 252/320**, p=0.125; **classifier accuracy 94.77%**, so improvement is **not confirmed** on this model.
+- D3/D4 transfer of previously certified masks is poor for both learned variants; **do not describe certification on D1+D2 as invariance across donors**.
+
+All methods count one **evaluated input** to the black-box model as one online query (Q=8 or 16 **total across selected donors**), while offline TRAIN-only calibration and independent posthoc donor audits are separately reported in the experiment manifests. Validity means a directly measured target-class switch on the specified edited signal; it does not establish causal attribution, physical plausibility, global minimality or cross-subject transport.
+
+Reproduce using the GitHub Actions workflows `uea_natops_sparse_q16.yml`, `uea_uwave_pairwise_adaptive.yml`, and `uea_pendigits_adaptive.yml` under `.github/workflows/`. Each workflow stores `per_sample.csv`, `summary.csv`, `manifest.json` and provenance. TRAIN/TEST archives are fetched and checked by matching `scripts/preprocess_uea_*.py`. The workflows are research experiments, not a production release.
+
 ## Status
 
 - Code and scripts are reproducible for published tables.
