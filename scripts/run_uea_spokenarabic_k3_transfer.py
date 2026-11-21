@@ -216,6 +216,9 @@ def run(args):
     with np.load(path) as z:
         labels=z["labels"].tolist()
         protocol=str(z["dataset_protocol"])
+        interpolation=str(z["resampling_description"])
+        source_train_lengths=z["train_original_lengths"].copy()
+        source_test_lengths=z["test_original_lengths"].copy()
     if (raw_train.shape!=(6599,93,13) or raw_test.shape!=(2199,93,13)
         or len(np.unique(ytrain))!=10 or len(np.unique(ytest))!=10
         or "UEA SpokenArabicDigits official aeon 1.5.0 TRAIN 6599 TEST 2199"
@@ -305,6 +308,11 @@ def run(args):
     write_csv(out/"summary.csv",table)
     manifest={
         "preregistered":"artifacts/beacon_spokenarabic_k3_donor_transfer_preregistered_2026-11-22.md",
+        "protocol_amendment":"artifacts/beacon_spokenarabic_amendment_A1_variable_length_2026-11-22.md",
+        "archive_returned_variable_length":True,
+        "resampling_preinference":interpolation,
+        "source_train_length_min_max":[int(source_train_lengths.min()),int(source_train_lengths.max())],
+        "source_test_length_min_max":[int(source_test_lengths.min()),int(source_test_lengths.max())],
         "dataset":"UEA SpokenArabicDigits official aeon 1.5.0",
         "data_sha256":hashlib.sha256(path.read_bytes()).hexdigest(),
         "model_sha256":counter["fitted_model_sha256"],
