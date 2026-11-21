@@ -131,7 +131,8 @@ def test_primary_paired_comparison_keeps_full_denominator():
             j=int(i<10) if method=="sparse_maximin" else int(i<5) if method=="forward_robust" else 0
             records.append({
                 "sample":i,"method":method,"strict_joint":j,"certified":j,
-                "model_queries":3,"both_within_20pct":j,"both_within_35pct":j,
+                "model_queries":3,"search_wall_seconds":0.,
+                "both_within_20pct":j,"both_within_35pct":j,
                 "both_within_50pct":j,"minimal_on_both":0,
                 "fraction_d1":.1 if j else None,"fraction_d2":.1 if j else None,
             })
