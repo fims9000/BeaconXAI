@@ -4,6 +4,7 @@ import pytest
 
 from scripts.preprocess_uea_basicmotions import prepare_basicmotions
 from beaconxai.cf_donor_line import search_donor_segment
+from beaconxai.contrastive import make_components
 
 
 def test_basicmotions_preserves_official_split_and_labels(tmp_path):
@@ -74,3 +75,14 @@ def test_invalid_target_and_model_outputs_rejected():
         search_donor_segment(x,d,np.array([1.,0.]),
                              lambda a:np.full((1,2),np.nan),
                              target_class=1,budget=8)
+
+
+
+def test_timeblock_components_are_coherent_without_sensor_order_assumption():
+    blocks=make_components((100,6),10,"all_channels")
+    assert len(blocks)==10
+    assert {(c.c0,c.c1) for c in blocks}=={(0,6)}
+    assert all(c.t1-c.t0==10 for c in blocks)
+    assert [(c.t0,c.t1) for c in blocks]==[
+        (i*10,(i+1)*10) for i in range(10)
+    ]
