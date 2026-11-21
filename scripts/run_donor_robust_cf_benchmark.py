@@ -23,6 +23,7 @@ from beaconxai.cf_path_search import search_counterfactual_path
 from beaconxai.contrastive import make_components, contrastive_prior
 from beaconxai.datasets import apply_standardizer, load_npz_dataset
 from beaconxai.donor_robust_cf import search_robust_counterfactual
+from beaconxai.donor_selection import farthest_first_donors, cover_radius
 from beaconxai.physical_groups import coupled_priority, uci_har_coupled_groups
 from beaconxai.real_donor import fit_real_donor_bank, nearest_context_index
 from beaconxai.subject_sampling import balanced_subject_sample
@@ -73,6 +74,9 @@ def aggregate(rows: list[dict]) -> list[dict]:
                 float(np.mean([r["n_logical_regions"] for r in certified]))
                 if certified else None
             ),
+            "mean_train_bank_cover_radius": float(np.mean([
+                r["selected_donors_cover_radius"] for r in group
+            ])),
             "median_gravity_ratio_if_certified": (
                 float(np.median([r["gravity_residual_roughness_ratio"]
                                  for r in certified]))
@@ -124,12 +128,14 @@ def run(args):
         if source not in profiles or target not in bank.donors:
             raise ValueError("model class absent from training")
         nearest = nearest_context_index(x, 0, bank, target, originals)
-        donor_indices = [nearest] + [
+        reference_indices = [nearest] + [
             j for j in range(len(bank.donors[target])) if j != nearest
         ][:args.reserve]
-        if len(donor_indices) != 3:
+        diverse_indices = list(farthest_first_donors(
+            bank.donors[target], nearest, count=3
+        ))
+        if len(reference_indices) != 3 or len(diverse_indices) != 3:
             raise ValueError("expected three donors for the target")
-        donor_pool = tuple(bank.donors[target][j] for j in donor_indices)
         cheap = coupled_priority(
             contrastive_prior(x, source, target, profiles, originals), originals
         )
@@ -141,12 +147,16 @@ def run(args):
 
         for q in budgets:
             policies = (
-                ("reference_directed", rank, False),
-                ("reference_uniform", uniform, False),
-                ("repair_directed", rank, True),
-                ("repair_uniform", uniform, True),
+                ("reference_directed", rank, False, False),
+                ("reference_uniform", uniform, False, False),
+                ("repair_directed", rank, True, False),
+                ("repair_uniform", uniform, True, False),
+                ("reference_diverse", rank, False, True),
+                ("repair_diverse", rank, True, True),
             )
-            for name, order, repair in policies:
+            for name, order, repair, diverse in policies:
+                donor_indices = diverse_indices if diverse else reference_indices
+                donor_pool = tuple(bank.donors[target][j] for j in donor_indices)
                 start = int(calls["examples"])
                 if repair:
                     result = search_robust_counterfactual(
@@ -219,19 +229,27 @@ def run(args):
                     "gravity_residual_roughness_ratio": rough,
                     "train_donor_indices": ",".join(str(bank.selected_train_indices[target][j])
                                                    for j in donor_indices),
+                    "selected_bank_indices": ",".join(map(str, donor_indices)),
+                    "selected_donors_cover_radius": cover_radius(
+                        bank.donors[target], donor_indices
+                    ),
                     "no_test_labels_used": True,
                 })
         # A separate post-hoc challenge set of training donors was not used
         # to select components or certify the 3-donor result. This cannot
         # guarantee generalization to unseen people or new distributions.
-        heldout = tuple(
-            bank.donors[target][j]
-            for j in range(len(bank.donors[target])) if j not in donor_indices
-        )
-        if not heldout:
-            raise ValueError("No withheld TRAIN donors available for validation")
         sample_rows = [r for r in qrows if r["sample"] == i]
         for row in sample_rows:
+            selected_bank_indices = {
+                int(v) for v in row["selected_bank_indices"].split(",")
+            }
+            heldout = tuple(
+                bank.donors[target][j]
+                for j in range(len(bank.donors[target]))
+                if j not in selected_bank_indices
+            )
+            if not heldout:
+                raise ValueError("No withheld TRAIN donors available for validation")
             row["withheld_n_checked"] = 0
             row["withheld_n_flipped"] = 0
             row["withheld_flip_fraction"] = None
@@ -257,9 +275,10 @@ def run(args):
             )
         # This separate, explicitly counted offline diagnostic never affects
         # the Q budget or any decision for the current test sample.
+        original_donor = bank.donors[target][nearest]
         reference = model(np.stack([
-            donor_pool[0],
-            splice(x, donor_pool[0], groups, tuple(range(len(groups))),
+            original_donor,
+            splice(x, original_donor, groups, tuple(range(len(groups))),
                    taper=args.taper),
         ]))
         offline_reference_calls += len(reference)
@@ -299,6 +318,12 @@ def run(args):
         "same_frozen_model_windows_target_and_donors_for_all_methods": True,
         "donors_are_training_examples_of_label_B_not_population_samples": True,
         "required_donors_for_certificate": 3,
+        "donor_selection_policies": [
+            "nearest_anchor_plus_first_two_bank_entries",
+            "nearest_anchor_plus_farthest_first_two_by_train_normalized_L2",
+        ],
+        "donor_selection_uses_no_model_calls": True,
+        "farther_selection_is_heuristic_not_coverage_certificate": True,
         "budget_max_additional_queries_including_donor_checks": budgets,
         "baseline_model_evaluations": len(test),
         "all_online_model_evaluations": online_total,
@@ -312,6 +337,7 @@ def run(args):
         "limitations": [
             "3-of-3 donor certificate is valid only for selected donors, this classifier and operator",
             "Withheld donors are unseen in search but drawn from the same TRAIN bank, not independent study subjects",
+            "The withheld subset differs between donor selection policies; all-eight pass is comparable, conditional pass fractions are not directly paired",
             "No statistical population coverage or physical causality is implied",
             "Prioritization, donor selection and model training costs are offline",
             "Local minimality is relative to single component deletions and selected donors",
