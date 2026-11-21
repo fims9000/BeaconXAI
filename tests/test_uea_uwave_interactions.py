@@ -43,7 +43,8 @@ def test_uwave_wrong_geometry_and_class_counts_rejected(tmp_path):
     with pytest.raises(ValueError,match="120/320"):
         prepare_uwave(x[:-1],train_y[:-1],t,test_y,tmp_path/"no.npz")
     with pytest.raises(ValueError,match="15 per class"):
-        incorrect=np.array([0]*120)
+        incorrect=np.arange(120)%8
+        incorrect[0]=1  # eight class labels remain, but counts become 14/16
         prepare_uwave(x,incorrect,t,test_y,tmp_path/"no.npz")
 
 
