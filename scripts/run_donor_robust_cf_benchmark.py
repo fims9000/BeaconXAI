@@ -97,6 +97,9 @@ def run(args):
     with np.load(path) as z:
         subject_train = np.asarray(z["subject_train"], dtype=int)
         subject_test = np.asarray(z["subject_test"], dtype=int)
+        dataset_protocol = (str(z["dataset_protocol"])
+                            if "dataset_protocol" in z.files
+                            else "UCI HAR official train/test split")
     if (set(subject_train) & set(subject_test) or
             len(raw_train) != len(y_train) or len(raw_test) != len(y_test)):
         raise ValueError("subject leakage or dimension mismatch")
@@ -306,7 +309,7 @@ def run(args):
     write_csv(out / "per_sample.csv", qrows)
     write_csv(out / "summary.csv", summary)
     manifest = {
-        "dataset": "UCI HAR official subject-disjoint test windows",
+        "dataset": dataset_protocol,
         "frozen_model_sha256": calls["fitted_model_sha256"],
         "train_standardizer_sha256": calls["training_standardizer_sha256"],
         "data_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
@@ -342,7 +345,8 @@ def run(args):
             "Prioritization, donor selection and model training costs are offline",
             "Local minimality is relative to single component deletions and selected donors",
             "Test labels and full-donor diagnostic references are not available to search",
-            "Single classifier seed and UCI HAR test split do not prove generalization",
+            "Single classifier seed and UCI HAR split do not prove generalization",
+            "Internal resplits from official TRAIN reuse material previously seen during method development",
             "Search policies may query different sets; all are hard-capped by Q",
         ],
     }
