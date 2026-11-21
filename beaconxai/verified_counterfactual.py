@@ -26,10 +26,45 @@ def splice(x: np.ndarray, donor: np.ndarray, components: Sequence,
     for idx in selected:
         if idx < 0 or idx >= len(components):
             raise ValueError("component index out of range")
-        candidate = components[idx]
-        # A logical candidate may edit multiple physically related channels.
-        # It still consumes exactly ONE model evaluation after this splice.
-        for c in getattr(candidate, "regions", (candidate,)):
+        item = components[idx]
+        regions = getattr(item, "regions", (item,))
+        if getattr(item, "preserve_gravity", False):
+            if len(regions) != 2:
+                raise ValueError("gravity-preserving candidate must edit two accel regions")
+            body, total = regions
+            if ((body.t0,body.t1)!=(total.t0,total.t1) or
+                (body.c0,body.c1)!=(0,3) or (total.c0,total.c1)!=(6,9) or
+                body.t0 < 0 or body.t1 > len(x)):
+                raise ValueError("invalid body/total acceleration geometry")
+            bsl = np.s_[body.t0:body.t1, body.c0:body.c1]
+            tsl = np.s_[total.t0:total.t1, total.c0:total.c1]
+            if np.any(changed[bsl]) or np.any(changed[tsl]):
+                raise ValueError("overlapping components cannot be combined")
+            mean = np.asarray(item.mean, dtype=float)
+            scale = np.asarray(item.scale, dtype=float)
+            if (mean.shape != (9,) or scale.shape != (9,) or
+                not np.isfinite(mean).all() or not np.isfinite(scale).all() or
+                np.any(scale <= 0)):
+                raise ValueError("invalid normalization of linked acceleration channels")
+            n = body.t1-body.t0
+            w = np.ones((n,1), dtype=float)
+            edge = min(taper, n//2)
+            if edge:
+                w[:edge,0] = np.linspace(0,1,edge+2)[1:-1]
+                w[-edge:,0] = np.linspace(1,0,edge+2)[1:-1]
+            body_new = x[bsl]*(1-w) + donor[bsl]*w
+            # Preserve total_acc - body_acc in raw units at every timestamp,
+            # including both splice boundaries. This does not enforce physics.
+            grav_raw = ((x[tsl]*scale[6:9]+mean[6:9]) -
+                        (x[bsl]*scale[:3]+mean[:3]))
+            total_new = ((grav_raw + body_new*scale[:3]+mean[:3]) -
+                         mean[6:9])/scale[6:9]
+            out[bsl] = body_new
+            out[tsl] = total_new
+            changed[bsl] = True
+            changed[tsl] = True
+            continue
+        for c in regions:
             if not (0 <= c.t0 < c.t1 <= len(x) and 0 <= c.c0 < c.c1 <= x.shape[1]):
                 raise ValueError("invalid component boundaries")
             sl = np.s_[c.t0:c.t1, c.c0:c.c1]
