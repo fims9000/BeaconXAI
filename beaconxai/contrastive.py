@@ -49,6 +49,10 @@ def make_components(shape: tuple[int, int], time_bins: int, group_mode: str = "p
         c_slices = [(0, 3), (3, 6), (6, 9)]
     elif group_mode == "per_channel":
         c_slices = [(j, j + 1) for j in range(channels)]
+    elif group_mode == "all_channels":
+        # Generic coherent temporal groups with no undocumented
+        # assumptions about accelerometer/gyroscope channel ordering.
+        c_slices = [(0, channels)]
     else:
         raise ValueError("unknown group_mode")
     edges = np.linspace(0, t_len, time_bins + 1, dtype=int)
