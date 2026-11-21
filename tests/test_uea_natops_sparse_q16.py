@@ -3,8 +3,10 @@ import numpy as np
 import pytest
 
 from beaconxai.contrastive import make_components
+from beaconxai.verified_counterfactual import splice
 from beaconxai.donor_robust_cf import (
     search_sparse_robust_counterfactual,train_profile_donor_gains,
+    _disjoint_support_counts,
 )
 from scripts.preprocess_uea_natops import prepare_natops
 from scripts.run_uea_natops_sparse_q16 import measured_search,primary_paired,summarize,METHODS
@@ -141,3 +143,29 @@ def test_primary_paired_comparison_keeps_full_denominator():
     assert p["new_only"]==5 and p["forward_only"]==0
     assert p["exact_mcnemar_p"]==.0625
     assert len(summarize(records))==3
+
+
+
+def test_fast_support_counts_equal_direct_splice_for_disjoint_masks():
+    rng=np.random.default_rng(641)
+    x=rng.normal(size=(51,24))
+    pool=(rng.normal(size=(51,24)),rng.normal(size=(51,24)))
+    groups=make_components((51,24),10,"all_channels")
+    counts=_disjoint_support_counts(x,pool,groups,taper=2)
+    assert counts is not None and counts.shape==(2,10)
+    selected=[(0,),(3,7),(0,1,2),(2,4,9),(1,4,5)]
+    for donor_i,donor in enumerate(pool):
+        for mask in selected:
+            direct=splice(x,donor,groups,mask,taper=2)
+            n=int(np.count_nonzero(np.abs(direct-x)>1e-8))
+            assert n==int(counts[donor_i,list(mask)].sum())
+
+
+def test_support_fast_path_abstains_on_overlapping_regions():
+    class Region:
+        t0,t1,c0,c1=0,10,0,24
+    x=np.zeros((51,24))
+    assert _disjoint_support_counts(
+        x,(np.ones_like(x),np.ones_like(x)),
+        [Region(),Region()],taper=2
+    ) is None
