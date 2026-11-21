@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/uci_har_native_cf_projection.yml'
       - 'beaconxai/cf_physical_projection.py'
+      - 'beaconxai/native_cf_projection.py'
+      - 'tests/test_native_cf_projection.py'
       - 'tests/test_cf_physical_projection.py'
       - 'scripts/run_native_cf_projection_audit.py'
       - 'scripts/run_native_cf_baselines.py'
@@ -43,7 +45,8 @@ jobs:
       - name: Install and unit test exact projection
         run: |
           python -m pip install -e . pytest matplotlib 'numpy<2'
-          python -m pytest -q tests/test_cf_physical_projection.py tests/test_native_cf_budget.py
+          python -m pytest -q tests/test_cf_physical_projection.py \
+            tests/test_native_cf_projection.py tests/test_native_cf_budget.py
       - name: Checkout immutable native source
         run: |
           git clone --depth 1 https://github.com/MarioRefoyo/FastPACE.git third_party/FastPACE
