@@ -2,8 +2,8 @@
 """Held-out UCI HAR counterfactual search: valid target flips, not Q36 top-k.
 
 For each original window: frozen classifier predicts class A, its runner-up B
-is target. A TRAIN-only B donor supplies real segments. Search singles then
-two-segment combinations with a hard model evaluation budget (Q8/Q16). No test
+is target. A TRAIN-only B donor supplies real segments. Compare single/pair search to cumulative multi-component edit paths under
+the same hard model-evaluation budget (Q8/Q16). No test
 activity label is used in donor choice, search, or model calls. Every model
 evaluation, including post-search donor robustness checks, is counted.
 """
@@ -22,8 +22,9 @@ from beaconxai.datasets import load_npz_dataset, apply_standardizer
 from beaconxai.real_donor import fit_real_donor_bank, nearest_context_index
 from beaconxai.subject_sampling import balanced_subject_sample
 from beaconxai.verified_counterfactual import (
-    find_verified_counterfactual, donor_stability_audit,
+    find_verified_counterfactual, donor_stability_audit, splice,
 )
+from beaconxai.cf_path_search import search_counterfactual_path
 from scripts.run_clean_calibrated_staged_budget import fit_predictor
 from scripts.run_q16_matched_ablation import write_csv
 
@@ -66,14 +67,34 @@ def run(args):
         audit_donors = [bank.donors[b][j] for j in range(len(bank.donors[b]))
                         if j != nearest][:args.reserve]
         for q in budgets:
-            for name, order in (("contrastive", rank), ("uniform", uniform)):
+            methods = (
+                ("contrastive", rank, False),
+                ("uniform", uniform, False),
+                ("contrastive_path", rank, True),
+                ("uniform_path", uniform, True),
+            )
+            for name, order, use_path in methods:
                 before = int(calls["examples"])
-                search = find_verified_counterfactual(
-                    x, scores, donor, comps, order, model, target_class=b,
-                    budget=q-args.reserve, max_changed_components=2,
-                    single_fraction=args.single_fraction, taper=args.taper
-                )
-                remaining = q-search.evaluations
+                if use_path:
+                    search = search_counterfactual_path(
+                        x, scores, donor, comps, order, model, target_class=b,
+                        budget=q-args.reserve, max_changed_components=8,
+                        seed_singletons=min(3, q-args.reserve), taper=args.taper,
+                    )
+                    query_count = search.calls
+                    minimal_checked = search.local_minimality_checked
+                else:
+                    search = find_verified_counterfactual(
+                        x, scores, donor, comps, order, model, target_class=b,
+                        budget=q-args.reserve, max_changed_components=2,
+                        single_fraction=args.single_fraction, taper=args.taper
+                    )
+                    query_count = search.evaluations
+                    # For a confirmed pair both singleton edits were measured
+                    # in the same first stage. This proves only 1-deletion
+                    # minimality for that donor, not global minimality.
+                    minimal_checked = bool(search.is_valid)
+                remaining = q-query_count
                 audit = donor_stability_audit(
                     x, scores, b, search.verified_edit or (),
                     audit_donors, comps, model,
@@ -81,9 +102,13 @@ def run(args):
                     taper=args.taper
                 )
                 actual_calls = int(calls["examples"]) - before
-                if actual_calls != search.evaluations+audit["tested"] or actual_calls > q:
+                if actual_calls != query_count+audit["tested"] or actual_calls > q:
                     raise AssertionError("counterfactual model budget accounting failed")
-                candidate = (search.queries[-1] if search.is_valid else None)
+                changed = (splice(x, donor, comps, search.verified_edit,
+                                  taper=args.taper) if search.is_valid else None)
+                edit_distance = (float(np.linalg.norm(changed-x) /
+                                       (max(np.linalg.norm(x), np.linalg.norm(donor)) + 1e-8))
+                                 if changed is not None else None)
                 rows.append({
                     "sample": i, "original_window_index": int(selected[i]),
                     "subject": int(test_ids[selected[i]]),
@@ -95,8 +120,9 @@ def run(args):
                                              if search.is_valid else None),
                     "components": (",".join(map(str, search.verified_edit))
                                    if search.is_valid else ""),
-                    "relative_l2": (candidate.relative_l2 if candidate else None),
-                    "search_calls": search.evaluations,
+                    "relative_l2": edit_distance,
+                    "local_minimality_checked": int(bool(minimal_checked)),
+                    "search_calls": query_count,
                     "donor_audit_calls": audit["tested"],
                     "total_additional_calls": actual_calls,
                     "donor_target_flip_fraction": audit["flip_fraction"],
@@ -107,7 +133,7 @@ def run(args):
                 })
     summaries = []
     for q in budgets:
-        for name in ("contrastive", "uniform"):
+        for name in ("contrastive", "uniform", "contrastive_path", "uniform_path"):
             group = [r for r in rows if r["budget"] == q and r["method"] == name]
             subjects = sorted({r["subject"] for r in group})
             per_subject = []
@@ -130,6 +156,16 @@ def run(args):
                 "subject_macro_mean_queries": float(np.mean([r["calls"] for r in per_subject])),
                 "n_verified": sum(r["verified"] for r in group),
                 "n_with_donor_audit": sum(r["donor_audit_calls"] > 0 for r in group),
+                "n_verified_local_minimality": sum(r["verified"] and r["local_minimality_checked"]
+                                                   for r in group),
+                "n_verified_at_most_two": sum(r["verified"] and r["n_components_changed"] <= 2
+                                              for r in group),
+                "mean_changed_if_valid": (
+                    float(np.mean([r["n_components_changed"] for r in group if r["verified"]]))
+                    if any(r["verified"] for r in group) else None),
+                "n_robust_on_both_extra_donors": sum(
+                    r["verified"] and r["donor_audit_calls"] == args.reserve and
+                    r["donor_target_flip_fraction"] == 1.0 for r in group),
             })
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -148,15 +184,19 @@ def run(args):
         "operator": "TRAIN class B actual window patches; seam taper",
         "target": "runner-up class in original model logits",
         "candidate_policies": ["class_contrastive_prior", "uniform"],
-        "max_edited_components": 2, "taper": args.taper,
+        "search_policies": ["singleton_then_pair", "multi_component_path_with_local_pruning"],
+        "max_edited_components": {"pair_search": 2, "path_search": 8}, "taper": args.taper,
         "model_evaluations_total_including_initial_baselines": calls["examples"],
         "no_test_label_used_in_search": True,
+        "paired_reference": "same x, classifier, target and donor for all policies within sample",
+        "local_minimality_is_not_global": True,
         "limitations": [
             "Success means verified switch to preselected target B under this donor and operator only",
             "A spliced real donor fragment does not imply a physically plausible whole series",
-            "First verified 1- or 2-component edit is not a global minimal counterfactual",
+            "First verified edit is not a global minimal counterfactual; subset minimality is flagged only when tested",
             "Donor audit is descriptive, not population coverage guarantee",
-            "Search may fail because of budget, donor, pair candidate restriction or model behavior",
+            "No model-verified target-class donor feasibility or sensor-physics realism guarantee",
+            "Search may fail because of budget, donor, group limit, candidate restriction or model behavior",
             "No real MCU latency, energy, RAM, or causal attribution measurements",
         ],
     }
