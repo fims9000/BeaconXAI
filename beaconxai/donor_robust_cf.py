@@ -192,3 +192,146 @@ def search_robust_counterfactual(
             return result(current, len(current) == 1)
         last_failed = failed
     return result(None)
+
+
+
+def search_backward_robust_counterfactual(
+    x: np.ndarray,
+    baseline_scores: np.ndarray,
+    donors: Sequence[np.ndarray],
+    components: Sequence,
+    removal_order: Sequence[int],
+    predict_many: Callable[[np.ndarray], np.ndarray],
+    *,
+    target_class: int,
+    budget: int = 16,
+    maximum_modified_fraction: float | None = None,
+    taper: int = 2,
+) -> RobustCounterfactual:
+    """Budget-exact coarse-to-fine pruning of one mask across all TRAIN donors.
+
+    The full donor-patched window must first be measured on EVERY donor.
+    Subsequent grouped removals are accepted only after measuring the SAME
+    reduced mask on EVERY donor; a failure on one donor is sufficient to
+    reject the removal. All model examples, not Python batch calls, count.
+
+    A certificate refers to exactly the donor instances provided. A
+    singleton-deletion minimality flag is true ONLY if the final mask has
+    been checked against every individual removal, either with a measured
+    failure witness or (for empty masks) with the cached original output.
+    max_modified_fraction, if set, is a *hard return constraint* on every
+    donor, never an inferred guarantee.
+    """
+    source = np.asarray(x, dtype=float)
+    base = np.asarray(baseline_scores, dtype=float)
+    pool = tuple(np.asarray(d, dtype=float) for d in donors)
+    order = tuple(int(j) for j in removal_order)
+    if (source.ndim != 2 or not np.isfinite(source).all()
+        or base.ndim != 1 or len(base) < 2 or not np.isfinite(base).all()
+        or len(pool) < 2 or any(d.shape != source.shape or not np.isfinite(d).all()
+                                for d in pool)
+        or not components or len(order) != len(components)
+        or set(order) != set(range(len(components)))):
+        raise ValueError("invalid source, donor bank, scores or removal order")
+    source_class = int(np.argmax(base))
+    if not 0 <= target_class < len(base) or target_class == source_class:
+        raise ValueError("target must differ from predicted source class")
+    if not isinstance(budget, int) or budget < len(pool):
+        raise ValueError("budget must fit initial checks for all donors")
+    if not isinstance(taper, int) or taper < 0:
+        raise ValueError("invalid taper")
+    if maximum_modified_fraction is not None and not (
+        0 < maximum_modified_fraction <= 1
+        and np.isfinite(maximum_modified_fraction)
+    ):
+        raise ValueError("invalid edit support cap")
+
+    probes: list[DonorProbe] = []
+    cache: dict[tuple[tuple[int, ...], int], DonorProbe] = {}
+    ever_flip = False
+    exhausted = False
+
+    def check(mask: tuple[int, ...], donor_index: int, stage: str) -> DonorProbe | None:
+        nonlocal ever_flip, exhausted
+        key = tuple(sorted(mask))
+        ck = (key, donor_index)
+        if ck in cache:
+            return cache[ck]
+        if len(probes) >= budget:
+            exhausted = True
+            return None
+        edited = splice(source, pool[donor_index], components, key, taper=taper)
+        scores = np.asarray(predict_many(edited[None]), dtype=float)
+        if scores.shape != (1, len(base)) or not np.isfinite(scores).all():
+            raise ValueError("classifier must return finite [1,classes] scores")
+        predicted = int(np.argmax(scores[0]))
+        flip = predicted == target_class
+        probe = DonorProbe(key, donor_index, predicted,
+                           target_margin(scores[0], target_class), flip, stage)
+        probes.append(probe)
+        cache[ck] = probe
+        ever_flip |= flip
+        return probe
+
+    def evaluate_all(mask: tuple[int, ...], stage: str) -> bool | None:
+        # Empty mask is exactly x; cached source prediction proves a failure.
+        if not mask:
+            return False
+        for donor_index in range(len(pool)):
+            p = check(mask, donor_index, stage)
+            if p is None:
+                return None
+            if not p.targeted_flip:
+                return False
+        return True
+
+    def compact(mask: tuple[int, ...]) -> bool:
+        if maximum_modified_fraction is None:
+            return True
+        for donor in pool:
+            edited = splice(source, donor, components, mask, taper=taper)
+            if float(np.mean(np.abs(edited - source) > 1e-8)) > maximum_modified_fraction:
+                return False
+        return True
+
+    def done(mask: tuple[int, ...] | None, minimal: bool = False) -> RobustCounterfactual:
+        qualified = mask is not None and compact(mask)
+        result_mask = mask if qualified else None
+        return RobustCounterfactual(
+            "verified_all_selected_donors" if qualified
+            else ("budget_exhausted_without_certificate" if exhausted
+                  else "not_found_within_budget"),
+            source_class, target_class, result_mask,
+            len(probes), budget, len(pool), tuple(probes),
+            bool(minimal and qualified), ever_flip,
+        )
+
+    current = tuple(range(len(components)))
+    initial = evaluate_all(current, "full_donor_seed")
+    if initial is not True:
+        return done(None)
+
+    # A verified full mask is retained if finer changes cannot be confirmed.
+    chunk = max(1, len(current) // 2)
+    while chunk >= 1:
+        while True:
+            active = [j for j in order if j in current]
+            removed = False
+            for pos in range(0, len(active), chunk):
+                dropped = set(active[pos:pos+chunk])
+                reduced = tuple(j for j in current if j not in dropped)
+                verdict = evaluate_all(reduced, "chunk_prune" if chunk > 1 else "singleton_prune")
+                if verdict is None:
+                    return done(current)
+                if verdict:
+                    current = reduced
+                    removed = True
+                    break
+            if not removed:
+                if chunk == 1:
+                    return done(current, minimal=True)
+                break
+        if chunk == 1:
+            break
+        chunk = max(1, chunk // 2)
+    return done(current, minimal=len(current) == 1)
