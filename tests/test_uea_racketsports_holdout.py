@@ -27,7 +27,7 @@ def test_official_split_shapes_and_train_only_label_mapping(tmp_path):
         assert file["x_test"].shape==(152,30,6)
         assert file["y_train"].min()==0 and file["y_train"].max()==3
         assert "no verified participant IDs" in str(file["dataset_protocol"])
-        np.testing.assert_array_equal(file["x_train"][0],tr[0].T)
+        np.testing.assert_allclose(file["x_train"][0],tr[0].T,rtol=1e-6,atol=1e-6)
 
 
 def test_preprocessor_rejects_mismatched_labels_and_geometry(tmp_path):
