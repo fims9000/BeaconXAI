@@ -26,7 +26,9 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 
 from beaconxai.cf_donor_line import search_donor_segment
-from beaconxai.cf_path_search import search_counterfactual_path
+from beaconxai.cf_path_search import (
+    search_counterfactual_path, search_backward_counterfactual
+)
 from beaconxai.contrastive import make_components, contrastive_prior
 from beaconxai.datasets import load_npz_dataset, apply_standardizer
 from beaconxai.native_cf_budget import TrainingGaussianOutlier
@@ -153,11 +155,32 @@ def run(args):
             for method in ("beacon_directed","beacon_uniform",
                            "beacon_directed_extended","beacon_uniform_extended",
                            "beacon_timeblock","beacon_timeblock_uniform",
+                           "beacon_timeblock_backward",
+                           "beacon_timeblock_backward_uniform",
                            "donor_line","native_multisubspace"):
                 before=int(calls["examples"])
                 edit=None
                 status="not_found"
-                if method.startswith("beacon_"):
+                if method.startswith("beacon_timeblock_backward"):
+                    remove_order=(
+                        list(reversed(time_directed)) if
+                        method=="beacon_timeblock_backward"
+                        else time_uniform
+                    )
+                    result=search_backward_counterfactual(
+                        x,base,donor,time_components,remove_order,model,
+                        target_class=target,budget=q,taper=args.taper
+                    )
+                    if result.is_valid:
+                        edit=splice(
+                            x,donor,time_components,result.verified_edit,
+                            taper=args.taper
+                        )
+                    status=result.status
+                    reported=result.calls
+                    local_minimality=int(
+                        result.is_valid and result.local_minimality_checked)
+                elif method.startswith("beacon_"):
                     if method=="beacon_timeblock":
                         order,atoms,max_groups=(
                             time_directed,time_components,len(time_components))
@@ -284,6 +307,9 @@ def run(args):
         "component_fraction_per_group":1/len(components),
         "timeblock_fraction_per_group":1/len(time_components),
         "timeblock_uses_all_archive_channels_without_sensor_physics_claim":True,
+        "backward_timeblock_method_starts_from_verified_full_training_donor_patch":True,
+        "backward_donor_pruning_measures_each_accepted_removal":True,
+        "backward_local_minimality_requires_final_single_removal_checks":True,
         "beacon_standard_max_groups":args.max_changed,
         "beacon_extended_max_groups":args.max_extended,
         "offline_prefix_oracle_only_descriptive":args.offline_prefix,
