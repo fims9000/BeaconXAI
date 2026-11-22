@@ -66,3 +66,26 @@
 ## Решение после SpokenArabicDigits (22.11.2026)
 
 Отдельный заранее зафиксированный контроль **K3 против K2** дал отрицательный результат по переносимости на D4/D5 (`80/320 vs 91/320`, p=0,04329). В качестве рабочих controls сохраняем K2 static maximin и аддитивный адаптивный вариант; K3-farthest считать **неприоритетной исследовательской абляцией**. Не включать его в default. Новая версия должна управлять **ценностью проверки доноров** под общий Q, оценивать риск на TRAIN и сравнивать transfer на другом holdout без подгонки по SpokenArabicDigits TEST.
+
+
+## Update: train-fitted risk gate on untouched CharacterTrajectories (22.11.2026)
+
+[New complete independent report](beacon_charactertrajectories_transfer_gate_results_2026-11-22.md), [successful CI with raw CSV/JSON](https://github.com/fims9000/BeaconXAI/actions/runs/45024767799), [original protocol](beacon_charactertrajectories_transfer_gate_preregistered_2026-11-22.md), [documented pre-model amendment A1](beacon_charactertrajectories_amendment_A1_eq119_2026-11-22.md).
+
+The official aeon equal-length archive was **119** time points, not 182 as assumed from general dataset tables. This was discovered during preprocessor validation before any model fitting or TEST inference, and the protocol amendment only changed sample geometry while preserving split, Q, ten bins, donor selection and risk thresholds. The first completed computation subsequently failed on writing a mixed TRAIN/TEST CSV schema; fixing missing CSV field defaults did not change scientific decisions.
+
+A TRAIN-only ExtraTrees achieved **97.284% accuracy (1397/1436)** on the official TEST. The original TRAIN was split into 987 model-fit, 202 risk-fit and 233 separate threshold-calibration windows, all disjoint by **window index**, not established independent people. Only 320 fixed TEST windows were used for explanations.
+
+At Q16 shared across D1+D2, the existing sparse BEACON found 182/320 directly verified compact certificates, of which **130/320** transferred without changing S to unseen D3+D4, with posthoc calls outside Q16. The nine-feature logistic risk model, trained on only 113 successful K2 risk-fit windows, was calibrated on 136 successful K2 gate-calibration windows using a Bonferroni-adjusted Clopper–Pearson criterion allowing failure upper bound **0.5**. That criterion selected **the most permissive candidate cutoff** (136/136 calibration masks accepted).
+
+- **Ungated K2**: 182 issued, 52 failed on D3/D4, 130/320 unconditional transfers.
+- **TRAIN-frozen risk gate**: 181 issued, 51 failed, **same 130/320** unconditional transfers.
+- **Matched TRAIN support-only gate**: 182 issued, 52 failed, **same 130/320** transfers.
+
+**No practical positive result for the frozen risk gate**. The conditional failed-transfer fraction declined by only 0.39 percentage points (28.57% → 28.18%) because a single failing mask was rejected. The gate spent no extra online calls and could not change masks or increase unconditional successful transfers by design.
+
+After opening TEST, *exploratory only*, the TRAIN-fitted risk score had ROC-AUC **0.7433** against observed D3/D4 failure among certified masks; edited-support fraction alone gave **0.5154**. Failure rates rose from 3/46 (6.5%) in the low-risk quartile to 23/45 (51.1%) in the highest-risk quartile. These **TEST-derived quartiles must never be used as preregistered or deployable gate thresholds**. The robust operational decision rule remains scientifically unresolved.
+
+Full costs were independently reconciled: 320 TRAIN-donor screening, 1871 cached original f(x), 8568 online Q16 search and 862 separate D3/D4 evaluations, totalling **11621 model-input predictions**. All 34 focused tests passed, no individual search exceeded Q16. In the status CSV, the new gate policies appear as **filtered certificates from the same search**, not separate searches with three independent Q16 budgets.
+
+**Updated priority:** a donor-risk score may meaningfully *rank* failures, but a successful ranker is not a useful selective policy without TRAIN-calibrated risk-coverage. Develop an a priori stricter risk target on future TRAIN-only data, and evaluate on an entirely new corpus. To improve unconditional transfer coverage, the algorithm must actually change candidate selection or allocate existing Q toward verification; mere refusal cannot increase successful transfers. Keep K3-farthest negative and pairwise-negative results; do not merge this draft into main.
