@@ -12,3 +12,6 @@ UEA_PenDigits,raw_MLP,0.947684391,320,pairs_adaptive,16,2,257,254,9.178125,149,D
 UEA_PenDigits,raw_MLP,0.947684391,320,additive_adaptive,16,2,257,253,8.94375,150,D3D4_posthoc_same_mask,static_sparse,0.125,44950732585
 UEA_SpokenArabicDigits,ExtraTrees,0.9272396544,320,K2_nearest,16,2,139,137,12.515625,91,D4D5_posthoc_same_mask,K3_stress,0.0432852507,44953711131
 UEA_SpokenArabicDigits,ExtraTrees,0.9272396544,320,K3_stress,16,3,122,111,13.878125,80,D4D5_posthoc_same_mask,K2_nearest,0.0432852507,44953711131
+UEA_CharacterTrajectories_eq,ExtraTrees,0.9728412256,320,K2_ungated,16,2,182,173,11.284375,130,D3D4_posthoc_same_mask,risk_gate_exploratory,,45024767799
+UEA_CharacterTrajectories_eq,ExtraTrees,0.9728412256,320,K2_train_risk_gate,16,2,181,173,11.284375,130,D3D4_posthoc_same_mask,K2_ungated,,45024767799
+UEA_CharacterTrajectories_eq,ExtraTrees,0.9728412256,320,K2_support_gate,16,2,182,173,11.284375,130,D3D4_posthoc_same_mask,K2_ungated,,45024767799
