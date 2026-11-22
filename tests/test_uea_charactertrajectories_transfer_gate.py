@@ -94,7 +94,7 @@ def test_unseen_donors_do_not_affect_mask_selection_or_online_q():
     }
     from types import SimpleNamespace
     results=[]
-    for out_of_search in [(.9,1.1),(.01,.02)]:
+    for out_of_search in [(1.2,1.3),(1.6,1.7)]:
         donors=np.stack([
             np.ones_like(x),1.05*np.ones_like(x),
             *(np.full_like(x,v) for v in out_of_search),
