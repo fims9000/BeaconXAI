@@ -1,0 +1,82 @@
+name: BEACON preregistered UCR Wafer and TwoPatterns Q16 transfer-aware ranking
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/ucr_active_transfer_q16.yml'
+      - 'beaconxai/transfer_candidate_policy.py'
+      - 'beaconxai/donor_robust_cf.py'
+      - 'scripts/preprocess_ucr_active_transfer.py'
+      - 'scripts/run_ucr_active_transfer.py'
+      - 'tests/test_transfer_candidate_policy.py'
+      - 'tests/test_ucr_active_transfer.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  PYTHONHASHSEED: '0'
+
+jobs:
+  train-only-adaptive-q16:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        dataset: [Wafer, TwoPatterns]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install library and pinned official archive reader
+        run: |
+          python -m pip install -e . pytest matplotlib aeon==1.5.0
+      - name: Test legacy parity, callbacks, exact Q and honest donor isolation
+        run: |
+          python -m pytest -q \
+            tests/test_transfer_candidate_policy.py \
+            tests/test_ucr_active_transfer.py \
+            tests/test_donor_robust_cf.py \
+            tests/test_uea_charactertrajectories_transfer_gate.py
+      - name: Load official UCR ${{ matrix.dataset }} splits with geometry checks
+        run: |
+          python -u scripts/preprocess_ucr_active_transfer.py \
+            --dataset ${{ matrix.dataset }} \
+            --out data/ucr_${{ matrix.dataset }}_active_transfer.npz
+      - name: Train TRAIN-only four-donor mask predictor and evaluate fixed TEST Q16
+        run: |
+          python -u scripts/run_ucr_active_transfer.py \
+            --dataset ${{ matrix.dataset }} \
+            --npz-path data/ucr_${{ matrix.dataset }}_active_transfer.npz \
+            --out-dir outputs_composite/ucr_${{ matrix.dataset }}_active_transfer \
+            --seed 57 --trees 120 --donors 16
+      - name: Export pinned provenance even on experiment errors
+        if: always()
+        run: |
+          mkdir -p outputs_composite/ucr_${{ matrix.dataset }}_active_transfer
+          {
+            git rev-parse HEAD
+            git rev-parse e56c8d4e0b92d80f29644b48ab7e025df882e736
+            python --version
+            python -m pip freeze | grep -E 'aeon|numpy|scikit-learn|scipy|pandas|pytest'
+            if test -f data/ucr_${{ matrix.dataset }}_active_transfer.npz; then sha256sum data/ucr_${{ matrix.dataset }}_active_transfer.npz; fi
+          } > outputs_composite/ucr_${{ matrix.dataset }}_active_transfer/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ucr-${{ matrix.dataset }}-online-transfer-q16
+          path: outputs_composite/ucr_${{ matrix.dataset }}_active_transfer/
+          retention-days: 90
+          if-no-files-found: warn
