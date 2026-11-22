@@ -384,6 +384,8 @@ def search_sparse_robust_counterfactual(
     budget: int = 16,
     maximum_modified_fraction: float = .35,
     taper: int = 2,
+    candidate_priority: Callable[[tuple[tuple[int,...], ...], np.ndarray,
+                                  np.ndarray, tuple[DonorProbe,...]], np.ndarray] | None = None,
 ) -> RobustCounterfactual:
     """Search *only compact* masks; measure one target for every donor within Q.
 
@@ -394,6 +396,12 @@ def search_sparse_robust_counterfactual(
     that the surrogate score guarantees model switching is allowed.
     Real measurements of the worst predicted donor are made first, so a failed
     candidate often consumes one rather than two classifier inputs.
+
+    Optional candidate_priority gets the finite, compact mask list, the
+    original maximin scores, maximum D1/D2 support and ONLY observed probes.
+    It can update mask ordering after each observed black-box evaluation;
+    returning surrogate scores never changes certification or the shared Q.
+    With candidate_priority=None the historical ranking is bit-for-bit intact.
 
     All accepted masks have a real target flip on every fixed donor, remain
     <=maximum_modified_fraction on each, and stay within the SHARED Q budget.
@@ -453,6 +461,39 @@ def search_sparse_robust_counterfactual(
             candidates.append((-gain,-size,chosen))
     candidates.sort()
 
+    def candidate_iterator():
+        if candidate_priority is None:
+            for _,_,mask in candidates:
+                yield mask
+            return
+        masks=tuple(c[2] for c in candidates)
+        maximin=np.asarray([-c[0] for c in candidates],dtype=float)
+        support=[]
+        for mask in masks:
+            if disjoint_counts is not None:
+                fractions=np.sum(disjoint_counts[:,list(mask)],axis=1)/source.size
+            else:
+                fractions=np.asarray([
+                    float(np.mean(np.abs(
+                        splice(source,d,components,mask,taper=taper)-source
+                    )>1e-8)) for d in pool
+                ])
+            support.append(float(np.max(fractions)))
+        maximum_support=np.asarray(support,dtype=float)
+        remaining=set(range(len(masks)))
+        while remaining:
+            values=np.asarray(
+                candidate_priority(masks,maximin.copy(),maximum_support.copy(),
+                                   tuple(probe_log)),dtype=float,
+            )
+            if values.shape!=(len(masks),) or not np.isfinite(values).all():
+                raise ValueError("candidate policy must return finite [n_compact_masks]")
+            # Previous candidates cannot be retried. Deterministic rank tie-break
+            # preserves the original static order when score values are equal.
+            index=min(remaining,key=lambda j:(-float(values[j]),j))
+            remaining.remove(index)
+            yield masks[index]
+
     def check(mask:tuple[int,...],didx:int,stage:str) -> DonorProbe|None:
         nonlocal exhausted,ever_flip
         key=tuple(sorted(mask))
@@ -499,7 +540,7 @@ def search_sparse_robust_counterfactual(
             bool(minimal and selected is not None),ever_flip,
         )
 
-    for _,_,candidate in candidates:
+    for candidate in candidate_iterator():
         verdict=confirmed(candidate,"compact_candidate")
         if verdict is None:
             return result(None)
