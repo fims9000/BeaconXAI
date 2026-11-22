@@ -1,0 +1,81 @@
+name: BEACON cheap signed counterevidence versus full Q36
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uci_har_directed_counterevidence.yml'
+      - 'beaconxai/directed_evidence.py'
+      - 'beaconxai/active_residual_evidence.py'
+      - 'tests/test_active_residual_evidence.py'
+      - 'beaconxai/conformal_evidence.py'
+      - 'scripts/run_cheap_directed_counterevidence.py'
+      - 'tests/test_directed_evidence.py'
+      - 'tests/test_cheap_directed_counterevidence.py'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+
+env:
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  VECLIB_MAXIMUM_THREADS: '1'
+  NUMEXPR_NUM_THREADS: '1'
+  PYTHONHASHSEED: '0'
+
+jobs:
+  signed-mathematical-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        model: [raw_mlp, extratrees]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install project and test dependencies
+        run: python -m pip install -e . pytest
+      - name: Verify source-identity logic and no y_test leakage
+        run: |
+          python -m pytest -q tests/test_directed_evidence.py \
+            tests/test_cheap_directed_counterevidence.py \
+            tests/test_active_residual_evidence.py
+      - name: Prepare subject-disjoint UCI HAR
+        run: |
+          python scripts/preprocess_uci_har_for_q36.py \
+            --root data/uci_har --out data/uci_har_official_subjects.npz
+      - name: Measure signed counterevidence Q0 Q16 and full Q36
+        run: |
+          python -u scripts/run_cheap_directed_counterevidence.py \
+            --npz-path data/uci_har_official_subjects.npz \
+            --out-dir outputs_composite/math_signed_${{ matrix.model }} \
+            --model ${{ matrix.model }} \
+            --windows-per-subject 6 --q 16 --seed 57
+      - name: Preserve exact provenance
+        if: always()
+        run: |
+          mkdir -p outputs_composite/math_signed_${{ matrix.model }}
+          {
+            git rev-parse HEAD
+            python --version
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pytest'
+            if test -f data/uci_har_official_subjects.npz; then
+              sha256sum data/uci_har_official_subjects.npz
+            fi
+          } > outputs_composite/math_signed_${{ matrix.model }}/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: signed-counterevidence-${{ matrix.model }}
+          path: outputs_composite/math_signed_${{ matrix.model }}/
+          retention-days: 30
+          if-no-files-found: warn

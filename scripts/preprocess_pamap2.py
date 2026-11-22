@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import argparse
-import io
+import http.client
 import json
 import re
+import tempfile
+import time
 import zipfile
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import numpy as np
 
@@ -28,16 +30,97 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _download_pamap2_archive(archive: Path, max_attempts: int = 8) -> Path:
+    """Stream the large UCI ZIP to disk and resume after connection drops.
+
+    Partial downloads are never treated as complete. On resume, the HTTP
+    server must return 206 with an exact Content-Range; a server that ignores
+    Range is handled by restarting from zero. The complete ZIP is CRC checked.
+    """
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be positive")
+    if archive.is_file():
+        try:
+            with zipfile.ZipFile(archive) as zf:
+                if zf.testzip() is None:
+                    return archive
+        except (OSError, zipfile.BadZipFile):
+            pass
+        archive.unlink()
+    part = archive.with_name(archive.name + ".part")
+    last_error = None
+    for attempt in range(max_attempts):
+        offset = part.stat().st_size if part.exists() else 0
+        headers = {"User-Agent": "BeaconXAI-reproducible-dataset/1.0",
+                   "Accept-Encoding": "identity"}
+        if offset:
+            headers["Range"] = f"bytes={offset}-"
+        try:
+            with urlopen(Request(PAMAP2_URL, headers=headers), timeout=300) as stream:
+                code = stream.status
+                if code not in (200, 206):
+                    raise OSError(f"Unexpected HTTP {code}")
+                total = None
+                if code == 206:
+                    m = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)",
+                                     stream.headers.get("Content-Range", ""))
+                    if not m or int(m.group(1)) != offset:
+                        raise OSError("Invalid Content-Range for resumed PAMAP2 ZIP")
+                    total = int(m.group(3))
+                else:
+                    # The server ignored Range; never append an entire 200 response.
+                    offset = 0
+                    if stream.headers.get("Content-Length"):
+                        total = int(stream.headers["Content-Length"])
+                with part.open("ab" if offset else "wb") as out:
+                    while True:
+                        try:
+                            chunk = stream.read(4 * 1024 * 1024)
+                        except http.client.IncompleteRead as exc:
+                            if exc.partial:
+                                out.write(exc.partial)
+                            raise
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                if total is not None and part.stat().st_size != total:
+                    raise OSError(f"Partial download: {part.stat().st_size}/{total} bytes")
+            with zipfile.ZipFile(part) as zf:
+                corrupt = zf.testzip()
+                if corrupt is not None:
+                    raise zipfile.BadZipFile(f"Corrupt ZIP member: {corrupt}")
+            part.replace(archive)
+            return archive
+        except (OSError, http.client.HTTPException, zipfile.BadZipFile,
+                EOFError, ValueError) as exc:
+            last_error = exc
+            print(f"PAMAP2 download interrupted (attempt {attempt+1}/{max_attempts}, "
+                  f"retained {part.stat().st_size if part.exists() else 0} bytes): {exc}",
+                  flush=True)
+            if attempt + 1 < max_attempts:
+                time.sleep(min(2 ** attempt, 8))
+    raise RuntimeError(f"Cannot download valid PAMAP2 ZIP after {max_attempts} attempts") from last_error
+
+
 def _ensure_pamap2(root: Path) -> Path:
     ds = root / "PAMAP2_Dataset"
-    if ds.exists():
+    if (ds / "Protocol").is_dir() and list((ds / "Protocol").glob("subject10*.dat")):
         return ds
+    if ds.exists():
+        raise RuntimeError(f"Existing PAMAP2 dataset directory is incomplete: {ds}")
     root.mkdir(parents=True, exist_ok=True)
-    raw = urlopen(PAMAP2_URL, timeout=300).read()
-    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
-        zf.extractall(root)
-    if not ds.exists():
-        raise FileNotFoundError(f"PAMAP2_Dataset not found after download in {root}")
+    archive = _download_pamap2_archive(root / "PAMAP2_Dataset.zip")
+    # Extract into a staging directory: interruption cannot leave an
+    # apparently usable partial dataset in the destination.
+    with tempfile.TemporaryDirectory(prefix="pamap2-extract-", dir=root) as tmp:
+        with zipfile.ZipFile(archive) as zf:
+            zf.extractall(tmp)
+        prepared = Path(tmp) / "PAMAP2_Dataset"
+        if not (prepared / "Protocol").is_dir() or not list(
+                (prepared / "Protocol").glob("subject10*.dat")):
+            raise FileNotFoundError("PAMAP2 ZIP lacks expected Protocol subject files")
+        prepared.rename(ds)
+    archive.unlink(missing_ok=True)
     return ds
 
 

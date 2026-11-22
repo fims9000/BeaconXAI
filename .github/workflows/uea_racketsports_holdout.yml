@@ -1,0 +1,72 @@
+name: BEACON preregistered RacketSports Q16 donor stability
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uea_racketsports_holdout.yml'
+      - 'scripts/preprocess_uea_racketsports.py'
+      - 'scripts/run_uea_racketsports_holdout.py'
+      - 'beaconxai/cf_donor_robustness.py'
+      - 'tests/test_uea_racketsports_holdout.py'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  PYTHONHASHSEED: '0'
+
+jobs:
+  heldout-two-donors:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install frozen classification and archive dependencies
+        run: |
+          python -m pip install -e . pytest matplotlib aeon==1.5.0
+      - name: Validate predeclared protocol and strict Q16 semantics
+        run: |
+          python -m pytest -q \
+            tests/test_uea_racketsports_holdout.py \
+            tests/test_cf_path_search.py \
+            tests/test_uea_basicmotions_cf.py
+      - name: Download untouched official RacketSports split
+        run: |
+          python scripts/preprocess_uea_racketsports.py \
+            --out data/uea_racketsports_official.npz
+      - name: Run frozen holdout and D1 D2 independent search and transfer audit
+        run: |
+          python -u scripts/run_uea_racketsports_holdout.py \
+            --npz-path data/uea_racketsports_official.npz \
+            --out-dir outputs_composite/racketsports_holdout \
+            --seed 57 --trees 120 --donors 16
+      - name: Reproduce provenance for the archived result
+        if: always()
+        run: |
+          mkdir -p outputs_composite/racketsports_holdout
+          {
+            git rev-parse HEAD
+            python --version
+            python -m pip freeze | grep -E 'aeon|numpy|scikit-learn|scipy|pandas|pytest'
+            if test -f data/uea_racketsports_official.npz; then sha256sum data/uea_racketsports_official.npz; fi
+          } > outputs_composite/racketsports_holdout/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: preregistered-racketsports-q16-donor-stability
+          path: outputs_composite/racketsports_holdout/
+          retention-days: 90
+          if-no-files-found: warn

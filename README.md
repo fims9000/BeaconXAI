@@ -7,6 +7,26 @@ Repository scope: two companion studies.
 - **Part 1**: component localization (counter-evidence shortlisting, low budget).
 - **Part 2**: risk auditing with adaptive budget (early stopping) and edge-server feasibility.
 
+## Research update: verified counterfactuals under shared Q8/Q16 (November 2026)
+
+The historical `v12-final` tag and the two original studies above are unchanged. The **draft research branch** adds a third experimental track: budget-exact finite-donor counterfactual certificates for time-series classifiers.
+
+- **Complete cross-dataset scientific status:** [counterfactual research summary](artifacts/beacon_counterfactual_research_status_2026-11-22.md). Contains the verified NATOPS, UWaveGestureLibrary, PenDigits, Epilepsy and RacketSports numbers, model accuracies, exact McNemar comparisons, failed hypotheses and TRAIN-only overhead.
+- NATOPS ExtraTrees: compact two-donor certificates at Q16 **67/180 vs 51/180** against a strong forward control (paired p=0.00249). This is a conditional operator-dependent result, not universal BEACON superiority.
+- UWave ExtraTrees: adaptive pair model **160/320 vs 141/320** static (p=0.0183), but **classifier accuracy only 62.2%**; additive adaptive is higher at 175/320.
+- PenDigits raw MLP: additive adaptive **257/320 vs 252/320**, p=0.125; **classifier accuracy 94.77%**, so improvement is **not confirmed** on this model.
+- D3/D4 transfer of previously certified masks is poor for both learned variants; **do not describe certification on D1+D2 as invariance across donors**.
+- SpokenArabicDigits ExtraTrees, 92.72% accuracy, Q16: K3 (adding one distant donor) gave **80/320** fresh D4+D5 transfers versus **91/320** under K2 (paired p=0.0433, negative result). This required a **documented pre-inference interpolation amendment** for aeon's variable-length MFCC inputs; see [results](artifacts/beacon_spokenarabic_k3_transfer_results_2026-11-22.md).
+- CharacterTrajectories _eq, ExtraTrees **97.28% accuracy**: a TRAIN-calibrated nine-feature transfer-risk gate rejected only one extra failed K2 mask. **Successful independent D3+D4 transfer remained 130/320** (original K2 182 issued, risk gate 181). Frozen risk gate **did not improve unconditional transfer**; posthoc risk-score ROC-AUC 0.743 vs support-only 0.515 is exploratory, not an independently validated choice of threshold. [Full report](artifacts/beacon_charactertrajectories_transfer_gate_results_2026-11-22.md), [pre-model archive-geometry amendment A1](artifacts/beacon_charactertrajectories_amendment_A1_eq119_2026-11-22.md), [CI artifacts](https://github.com/fims9000/BeaconXAI/actions/runs/45024767799).
+
+- **UCR Wafer, ExtraTrees accuracy 98.17%**, independent unseen D3/D4 transfer of the exact same compact Q16 mask: original sparse **44/320**, TRAIN-fitted candidate ranking **58/320**, primary paired exact McNemar **p=0.00434**. **LEARNED STATIC and LEARNED ONLINE both reached 58/320; new online feedback gave no established extra benefit**. Positive within one real sensor benchmark, not general XAI superiority.
+- **UCR TwoPatterns, ExtraTrees accuracy only 35.73%**: learned online 54/320 vs original 49/320, p=0.522; no confirmed benefit and the preregistered 70% model-quality requirement failed. On Wafer the learned mask label+calibration required **7374 offline black-box evaluations**, an essential cost. [Full preregistered report](artifacts/beacon_ucr_active_transfer_q16_results_2026-11-22.md), [frozen protocol](artifacts/beacon_wafer_twopatterns_active_transfer_preregistered_2026-11-22.md), [two-dataset CI with CSV/JSON](https://github.com/fims9000/BeaconXAI/actions/runs/45026897917).
+
+
+All methods count one **evaluated input** to the black-box model as one online query (Q=8 or 16 **total across selected donors**), while offline TRAIN-only calibration and independent posthoc donor audits are separately reported in the experiment manifests. Validity means a directly measured target-class switch on the specified edited signal; it does not establish causal attribution, physical plausibility, global minimality or cross-subject transport.
+
+Reproduce using the GitHub Actions workflows `uea_natops_sparse_q16.yml`, `uea_uwave_pairwise_adaptive.yml`, and `uea_pendigits_adaptive.yml` and `ucr_active_transfer_q16.yml` under `.github/workflows/`. Each workflow stores `per_sample.csv`, `summary.csv`, `manifest.json` and provenance. TRAIN/TEST archives are fetched and checked by matching `scripts/preprocess_uea_*.py`. The workflows are research experiments, not a production release.
+
 ## Status
 
 - Code and scripts are reproducible for published tables.

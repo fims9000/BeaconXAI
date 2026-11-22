@@ -1,0 +1,68 @@
+name: PAMAP2 Q16 reproducible evidence consensus
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/pamap2_evidence_consensus.yml'
+      - 'beaconxai/evidence_consensus.py'
+      - 'scripts/run_evidence_consensus_benchmark.py'
+      - 'tests/test_evidence_consensus.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  evidence-consensus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - heldout: '2,3'
+            tag: s2s3
+          - heldout: '6,7'
+            tag: s6s7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install package and pytest
+        run: python -m pip install -e . pytest
+      - name: Test query accounting and stable probe semantics
+        run: |
+          python -m pytest -q tests/test_evidence_consensus.py tests/test_real_donor.py
+      - name: Prepare independent held-out PAMAP2 split
+        run: |
+          python scripts/preprocess_pamap2.py \
+            --data-root data --window-length 200 --step 100 \
+            --min-purity 0.95 --test-subjects '${{ matrix.heldout }}' \
+            --out data/pamap2_${{ matrix.tag }}.npz
+      - name: Evaluate explanation consistency with separate offline donor reference
+        run: |
+          python -u scripts/run_evidence_consensus_benchmark.py \
+            --npz-path data/pamap2_${{ matrix.tag }}.npz \
+            --out-dir outputs_composite/evidence_consensus_${{ matrix.tag }} \
+            --max-samples 72 --max-donors 64 \
+            --replicates 4 --reference-donors 8 --epsilon 0.01 \
+            --seed 42
+      - name: Write reproducibility manifest
+        if: always()
+        run: |
+          mkdir -p outputs_composite/evidence_consensus_${{ matrix.tag }}
+          {
+            git rev-parse HEAD
+            python --version
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pandas|pytest'
+          } > outputs_composite/evidence_consensus_${{ matrix.tag }}/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evidence-consensus-${{ matrix.tag }}
+          path: outputs_composite/evidence_consensus_${{ matrix.tag }}/
+          if-no-files-found: warn
+          retention-days: 30

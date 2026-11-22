@@ -1,0 +1,100 @@
+BEACON Contrastive Q16 -- research prototype (not validated PAMAP2 results)
+
+PURPOSE
+Compare class-conditional low-cost component preselection against uniform
+occlusion, RISE-like masking, KernelSHAP-like weighted ridge, and zero-query
+class-profile prior using 16 ADDITIONAL model evaluations per example.
+
+FILES
+  beaconxai/contrastive.py
+  scripts/run_contrastive_q16.py
+  tests/test_contrastive.py
+
+QUICK TEST
+  python -m pytest tests/test_contrastive.py -q
+  python scripts/run_contrastive_q16.py --smoke
+
+DATA PREPARATION (downloads official PAMAP2 data)
+  python scripts/preprocess_pamap2.py --data-root data --window-length 200 --step 100 --min-purity 0.95 --test-subjects 8,9 --out data/pamap2_acc9_w200s100_p095.npz
+
+EQUAL-BUDGET LOCALIZATION AND CLASS-PAIR PROBE
+  python scripts/run_contrastive_q16.py --mode both --time-bins 12 --budget 16 --max-test 128 --repeats 5
+
+WALKING VS RUNNING (class codes 3 and 4 under preprocess_pamap2.py)
+  python scripts/run_contrastive_q16.py --mode boundary --source-class 3 --target-class 4 --time-bins 12 --budget 16 --max-test 256 --repeats 5
+
+RESULTS
+  outputs_composite/contrastive_q16/summary.csv
+  outputs_composite/contrastive_q16/summary.json
+  outputs_composite/contrastive_q16/per_sample.csv
+  outputs_composite/contrastive_q16/boundary_summary.json
+  outputs_composite/contrastive_q16/boundary_per_sample.csv
+
+BUDGET PROTOCOL
+One shared original model evaluation is cached. Q=16 counts 16 additional
+evaluated perturbations for each method. Training class profiles use TRAIN
+only and their memory and CPU cost must be measured separately.
+
+EVALUATION
+PAMAP2 injected component localization: hit@1, hit@3, hit@5, MRR, rank.
+Model decision probe: fixed A versus B score-gap reduction and observed
+flip to target B. Compare methods on exactly the same examples, perturbation
+operator, componentization, seeds, and query budgets. Aggregate repeated
+seeds by original example before bootstrapping; examine subject dependence.
+
+LIMITATIONS
+- No real PAMAP2 equal-budget Q16 RISE/KernelSHAP numbers are included.
+- RISE-like and KernelSHAP-like are regularized mask regression variants,
+  NOT exact implementations or exact Shapley values. With M=36 and Q=16,
+  the linear fit is underdetermined.
+- Synthetic injected-patch localization does not validate real-world
+  explanatory or causal correctness.
+- TRAIN class mean patches may be physically implausible; crossing a model
+  boundary does not imply crossing a physical activity boundary.
+- ExtraTrees on engineered statistics has strong rule/TreeSHAP baselines.
+- This patch does not produce validated global class prototypes or rules.
+- The method is motivated by TinyML but microcontroller testing is not done.
+- Do not assert superiority over LIME, RISE, KernelSHAP, TreeSHAP or ExtraTrees
+  rules without honest matched protocols and statistical analysis.
+
+CLAIM STATUS
+This is exploratory code and local tests. Real PAMAP2 scientific results are
+not available until the dataset is downloaded and the runner is executed.
+
+\n\nCLASS-PROTOTYPE INTERVENTION ATLAS (PAMAP2)
+====================================================
+Code: beaconxai/class_counterfactual.py
+Runner: scripts/run_class_counterfactual_atlas.py
+Tests: tests/test_class_counterfactual.py
+Automated experiment: .github/workflows/pamap2_class_counterfactual.yml
+
+python -m pip install -e . matplotlib pytest
+python -m pytest -q tests/test_class_counterfactual.py
+python scripts/run_class_counterfactual_atlas.py --npz-path data/pamap2_acc9_w200s100_p095.npz --budget 16 --prototype-mode both --rival-mode all --max-examples-per-class 2 --out-dir outputs_composite/class_counterfactual_atlas
+
+Training-only mean and median templates are fitted per class/time/channel.
+For every source and rival pair, Q16 = 4 selected components *
+2 replacement classes (source/rival) * 2 prototype kinds (mean/median).
+One cached baseline model prediction per example is counted separately.
+For a wider search choose --prototype-mode mean or median: Q16 then
+checks 8 components, still counting 16 perturbed examples per class pair.
+
+RESULT FILES
+  per_intervention.csv : before/after model scores, signed probability and margin deltas, actual predicted class
+  pair_summary.csv     : average effects for each source/rival and prototype kind
+  component_summary.csv: per source/rival/sensor/time-bin aggregation
+  class_atlas.csv      : descriptive per-class coverage and directed fractions
+  report.md            : user-readable class-by-class explanations
+  plots/*.png          : paired-class score heatmaps and signal/prototype overlays
+  manifest.json        : checksum, query cost, offline prototype memory, class coverage
+
+Two visual maps represent model p(source) and p(rival) separately; gray means
+component was not evaluated. Negative changes to original class are NOT
+automatically evidence in favor of the rival. Directed movement requires
+p(source) to fall AND p(rival) to rise; actual class-switch is separately recorded.
+
+NOTE: The prototype intervention is NOT guaranteed to be a realizable
+physical time series. Mean/median smoothing can create out-of-distribution
+artifacts. Atlas summaries are descriptive and depend on the classifier,
+training classes, and chosen held-out participants. These are not class
+definitions or calibrated uncertainty probabilities.

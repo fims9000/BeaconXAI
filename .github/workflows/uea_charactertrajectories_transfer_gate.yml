@@ -1,0 +1,75 @@
+name: BEACON CharacterTrajectories donor transfer risk gate Q16
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uea_charactertrajectories_transfer_gate.yml'
+      - 'beaconxai/donor_transfer_risk.py'
+      - 'scripts/preprocess_uea_charactertrajectories.py'
+      - 'scripts/run_uea_charactertrajectories_transfer_gate.py'
+      - 'tests/test_donor_transfer_risk.py'
+      - 'tests/test_uea_charactertrajectories_transfer_gate.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  PYTHONHASHSEED: '0'
+
+jobs:
+  preregistered-charactertrajectories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install fixed archive and ML dependencies
+        run: |
+          python -m pip install -e . pytest matplotlib aeon==1.5.0
+      - name: Check calibration, classifier-call accounting, donor isolation
+        run: |
+          python -m pytest -q \
+            tests/test_donor_transfer_risk.py \
+            tests/test_uea_charactertrajectories_transfer_gate.py \
+            tests/test_donor_robust_cf.py \
+            tests/test_uea_natops_sparse_q16.py
+      - name: Load untouched UEA CharacterTrajectories equal-length TRAIN/TEST
+        run: |
+          python -u scripts/preprocess_uea_charactertrajectories.py \
+            --out data/uea_charactertrajectories_eq.npz
+      - name: Freeze fit, risk, gate and independent TEST comparisons
+        run: |
+          python -u scripts/run_uea_charactertrajectories_transfer_gate.py \
+            --npz-path data/uea_charactertrajectories_eq.npz \
+            --out-dir outputs_composite/charactertrajectories_transfer_gate \
+            --seed 57 --trees 120 --donors 16
+      - name: Record reproducibility
+        if: always()
+        run: |
+          mkdir -p outputs_composite/charactertrajectories_transfer_gate
+          {
+            git rev-parse HEAD
+            git rev-parse a3ec537556b93fa3af8c196512ddd44b2e3d1708
+            python --version
+            python -m pip freeze | grep -E 'aeon|numpy|scikit-learn|scipy|pandas|pytest'
+            if test -f data/uea_charactertrajectories_eq.npz; then sha256sum data/uea_charactertrajectories_eq.npz; fi
+          } > outputs_composite/charactertrajectories_transfer_gate/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: charactertrajectories-donor-transfer-risk-q16
+          path: outputs_composite/charactertrajectories_transfer_gate/
+          retention-days: 90
+          if-no-files-found: warn

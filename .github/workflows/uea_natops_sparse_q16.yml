@@ -1,0 +1,69 @@
+name: BEACON preregistered NATOPS sparse two-donor Q16
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uea_natops_sparse_q16.yml'
+      - 'scripts/preprocess_uea_natops.py'
+      - 'scripts/run_uea_natops_sparse_q16.py'
+      - 'beaconxai/donor_robust_cf.py'
+      - 'tests/test_uea_natops_sparse_q16.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  PYTHONHASHSEED: '0'
+
+jobs:
+  holdout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install fixed archive reader and project
+        run: |
+          python -m pip install -e . pytest matplotlib aeon==1.5.0
+      - name: Verify scientific method and exact classifier-query limit
+        run: |
+          python -m pytest -q tests/test_uea_natops_sparse_q16.py tests/test_donor_robust_cf.py tests/test_cf_path_search.py
+      - name: Retrieve untouched official NATOPS split
+        run: |
+          python scripts/preprocess_uea_natops.py --out data/uea_natops_official.npz
+      - name: Evaluate frozen three-way Q16 policy
+        run: |
+          python -u scripts/run_uea_natops_sparse_q16.py \
+            --npz-path data/uea_natops_official.npz \
+            --out-dir outputs_composite/natops_sparse_q16 \
+            --seed 57 --trees 120 --donors 16
+      - name: Record provenance
+        if: always()
+        run: |
+          mkdir -p outputs_composite/natops_sparse_q16
+          {
+            git rev-parse HEAD
+            git rev-parse a66768c51be8876fc2bdcf99e166910341dd9af0
+            python --version
+            python -m pip freeze | grep -E 'aeon|numpy|scikit-learn|scipy|pandas|pytest'
+            if test -f data/uea_natops_official.npz; then sha256sum data/uea_natops_official.npz; fi
+          } > outputs_composite/natops_sparse_q16/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: preregistered-natops-sparse-q16
+          path: outputs_composite/natops_sparse_q16/
+          retention-days: 90
+          if-no-files-found: warn

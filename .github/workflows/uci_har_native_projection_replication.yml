@@ -1,0 +1,103 @@
+name: BEACON native projection replication on internal UCI HAR subjects
+
+on:
+  push:
+    branches:
+      - feature/contrastive-q16-20261119
+    paths:
+      - '.github/workflows/uci_har_native_projection_replication.yml'
+      - 'scripts/run_native_cf_projection_audit.py'
+      - 'scripts/resplit_uci_har_train_subjects.py'
+      - 'beaconxai/cf_physical_projection.py'
+      - 'beaconxai/cf_group_sparse.py'
+      - 'beaconxai/cf_budgeted_sparse_refine.py'
+      - 'tests/test_cf_group_sparse.py'
+      - 'tests/test_cf_budgeted_sparse_refine.py'
+      - 'beaconxai/native_cf_projection.py'
+      - 'tests/test_native_cf_projection.py'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  PYTHONHASHSEED: '0'
+
+jobs:
+  heldout-source-participants:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - model: raw_mlp
+            heldout: '1,3,5,6'
+            tag: foldA_mlp
+          - model: extratrees
+            heldout: '1,3,5,6'
+            tag: foldA_et
+          - model: raw_mlp
+            heldout: '7,8,11,14'
+            tag: foldB_mlp
+          - model: extratrees
+            heldout: '7,8,11,14'
+            tag: foldB_et
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install project and verify projection
+        run: |
+          python -m pip install -e . pytest matplotlib 'numpy<2'
+          python -m pytest -q tests/test_cf_physical_projection.py \
+            tests/test_native_cf_projection.py tests/test_native_cf_budget.py \
+            tests/test_cf_group_sparse.py tests/test_cf_budgeted_sparse_refine.py \
+            tests/test_resplit_uci_har_train_subjects.py
+      - name: Checkout exact authentic upstream
+        run: |
+          git clone --depth 1 https://github.com/MarioRefoyo/FastPACE.git third_party/FastPACE
+          test "$(git -C third_party/FastPACE rev-parse HEAD)" = "4bbeae86bbc6ad02f7ee79fb550c9866682f6deb"
+      - name: Build subject-disjoint evaluation from official TRAIN only
+        run: |
+          python scripts/preprocess_uci_har_for_q36.py \
+            --root data/uci_har --out data/uci_har_official_subjects.npz
+          python scripts/resplit_uci_har_train_subjects.py \
+            --source data/uci_har_official_subjects.npz \
+            --out data/uci_har_inner_${{ matrix.tag }}.npz \
+            --heldout '${{ matrix.heldout }}'
+      - name: Compare matched native original/projected/BEACON
+        run: |
+          python -u scripts/run_native_cf_projection_audit.py \
+            --npz-path data/uci_har_inner_${{ matrix.tag }}.npz \
+            --upstream third_party/FastPACE \
+            --out-dir outputs_composite/native_project_inner_${{ matrix.tag }} \
+            --model ${{ matrix.model }} --budgets 8,16 \
+            --max-test 96 --seed 57 --donors 8
+      - name: Preserve provenance
+        if: always()
+        run: |
+          mkdir -p outputs_composite/native_project_inner_${{ matrix.tag }}
+          {
+            git rev-parse HEAD
+            if test -d third_party/FastPACE/.git; then git -C third_party/FastPACE rev-parse HEAD; fi
+            python --version
+            python -m pip freeze | grep -E 'numpy|scikit-learn|scipy|pandas|pytest'
+            if test -f data/uci_har_inner_${{ matrix.tag }}.npz; then sha256sum data/uci_har_inner_${{ matrix.tag }}.npz; fi
+          } > outputs_composite/native_project_inner_${{ matrix.tag }}/provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-project-inner-${{ matrix.tag }}
+          path: outputs_composite/native_project_inner_${{ matrix.tag }}/
+          retention-days: 30
+          if-no-files-found: warn
