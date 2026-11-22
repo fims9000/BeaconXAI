@@ -15,6 +15,7 @@ def prepare_character_trajectories(xtr,ytr,xte,yte,out):
     test=np.asarray(xte,dtype=np.float32)
     yt=np.asarray(ytr).reshape(-1)
     yv=np.asarray(yte).reshape(-1)
+    print("ARCHIVE_GEOMETRY",train.shape,test.shape,yt.shape,yv.shape,flush=True)
     if (train.shape!=(1422,3,182) or test.shape!=(1436,3,182)
         or yt.shape!=(1422,) or yv.shape!=(1436,)
         or not np.isfinite(train).all() or not np.isfinite(test).all()):
