@@ -314,6 +314,12 @@ def run(args):
     out=Path(args.out_dir)
     out.mkdir(parents=True,exist_ok=True)
     allrows=risk_rows+gate_rows+test_rows
+    # TRAIN rows do not have TEST-only gate decisions: persist the same schema.
+    for rec in allrows:
+        rec.setdefault("base_issue",None)
+        rec.setdefault("risk_issue",None)
+        rec.setdefault("support_issue",None)
+        rec.setdefault("predicted_failure_risk",None)
     write_csv(out/"per_sample.csv",[
         {**r,
          "features":(",".join(map(str,r["features"]))
