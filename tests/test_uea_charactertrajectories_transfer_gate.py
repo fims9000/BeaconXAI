@@ -13,16 +13,16 @@ from scripts.run_uea_charactertrajectories_transfer_gate import (
 
 
 def test_official_fixed_archive_train_and_test_are_kept_distinct(tmp_path):
-    train=np.zeros((1422,3,182),dtype=np.float32)
-    test=np.zeros((1436,3,182),dtype=np.float32)
+    train=np.zeros((1422,3,119),dtype=np.float32)
+    test=np.zeros((1436,3,119),dtype=np.float32)
     ytrain=np.arange(1422)%20
     ytest=np.arange(1436)%20
     path=tmp_path/"character.npz"
     record=prepare_character_trajectories(train,ytrain,test,ytest,path)
     assert record["source_unequal_length"] is True
     with np.load(path) as z:
-        assert z["x_train"].shape==(1422,182,3)
-        assert z["x_test"].shape==(1436,182,3)
+        assert z["x_train"].shape==(1422,119,3)
+        assert z["x_test"].shape==(1436,119,3)
         fit,risk,gate=stratified_threeway(z["y_train"])
         assert len(fit)+len(risk)+len(gate)==1422
         assert not set(fit)&set(risk)
@@ -32,8 +32,8 @@ def test_official_fixed_archive_train_and_test_are_kept_distinct(tmp_path):
 
 
 def test_archive_wrong_shape_and_class_count_rejected(tmp_path):
-    train=np.zeros((1422,3,182))
-    test=np.zeros((1436,3,182))
+    train=np.zeros((1422,3,119))
+    test=np.zeros((1436,3,119))
     ytr=np.arange(1422)%20
     yte=np.arange(1436)%20
     with pytest.raises(ValueError,match="1422/1436"):
@@ -47,17 +47,17 @@ def test_archive_wrong_shape_and_class_count_rejected(tmp_path):
 
 
 def test_k2_certificate_and_d3_d4_audit_have_separate_real_model_input_cost():
-    x=np.zeros((182,3))
+    x=np.zeros((119,3))
     candidates=np.stack([
         np.full_like(x,.8),np.full_like(x,1.),
         np.full_like(x,1.2),np.full_like(x,1.4),
         np.full_like(x,1.6),
     ])
     from beaconxai.contrastive import fit_class_profiles
-    tr=np.r_[np.zeros((5,182,3)),candidates]
+    tr=np.r_[np.zeros((5,119,3)),candidates]
     yy=np.r_[np.zeros(5,dtype=int),np.ones(5,dtype=int)]
     profiles=fit_class_profiles(tr,yy)
-    groups=make_components((182,3),10,"all_channels")
+    groups=make_components((119,3),10,"all_channels")
     from types import SimpleNamespace
     bank=SimpleNamespace(
         donors={1:candidates},
@@ -86,8 +86,8 @@ def test_k2_certificate_and_d3_d4_audit_have_separate_real_model_input_cost():
 
 
 def test_unseen_donors_do_not_affect_mask_selection_or_online_q():
-    x=np.zeros((182,3))
-    groups=make_components((182,3),10,"all_channels")
+    x=np.zeros((119,3))
+    groups=make_components((119,3),10,"all_channels")
     profiles={
         0:(np.zeros_like(x),np.ones_like(x)),
         1:(np.ones_like(x),np.ones_like(x)),
