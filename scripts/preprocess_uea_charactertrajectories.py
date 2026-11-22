@@ -16,10 +16,10 @@ def prepare_character_trajectories(xtr,ytr,xte,yte,out):
     yt=np.asarray(ytr).reshape(-1)
     yv=np.asarray(yte).reshape(-1)
     print("ARCHIVE_GEOMETRY",train.shape,test.shape,yt.shape,yv.shape,flush=True)
-    if (train.shape!=(1422,3,182) or test.shape!=(1436,3,182)
+    if (train.shape!=(1422,3,119) or test.shape!=(1436,3,119)
         or yt.shape!=(1422,) or yv.shape!=(1436,)
         or not np.isfinite(train).all() or not np.isfinite(test).all()):
-        raise ValueError("CharacterTrajectories _eq requires finite 1422/1436 [3,182]")
+        raise ValueError("CharacterTrajectories _eq requires finite 1422/1436 [3,119]")
     labels=sorted(map(str,np.unique(yt)))
     if len(labels)!=20 or sorted(map(str,np.unique(yv)))!=labels:
         raise ValueError("twenty same TRAIN/TEST classes required")
@@ -38,12 +38,12 @@ def prepare_character_trajectories(xtr,ytr,xte,yte,out):
         labels=np.asarray(labels),
         dataset_protocol=np.asarray(
             "UEA CharacterTrajectories _eq aeon 1.5.0 official "
-            "TRAIN 1422 TEST 1436 T182 C3; source unequal length"
+            "TRAIN 1422 TEST 1436 T119 C3; source unequal length"
         ),
     )
     return {
         "dataset":"UEA CharacterTrajectories _eq",
-        "train":1422,"test":1436,"T":182,"C":3,
+        "train":1422,"test":1436,"T":119,"C":3,
         "classes":20,"source_unequal_length":True,
         "participant_ids_verified":False,
         "sha256":hashlib.sha256(dest.read_bytes()).hexdigest(),
