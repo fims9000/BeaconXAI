@@ -235,7 +235,7 @@ def run(args):
     with np.load(path) as z:
         protocol=str(z["dataset_protocol"])
         classes=z["labels"].tolist()
-    if (raw.shape!=(1422,182,3) or raw_test.shape!=(1436,182,3)
+    if (raw.shape!=(1422,119,3) or raw_test.shape!=(1436,119,3)
         or len(np.unique(ytrain))!=20 or len(np.unique(ytest))!=20
         or "UEA CharacterTrajectories _eq aeon 1.5.0 official" not in protocol):
         raise ValueError("requires pinned official CharacterTrajectories _eq archive")
@@ -248,7 +248,7 @@ def run(args):
     risk_x=apply_standardizer(raw[risk_ix],mu,sd)
     gate_x=apply_standardizer(raw[gate_ix],mu,sd)
     test=apply_standardizer(raw_test,mu,sd)
-    groups=make_components((182,3),BINS,"all_channels")
+    groups=make_components((119,3),BINS,"all_channels")
     bank=fit_real_donor_bank(
         fit,ytrain[fit_ix],groups,max_donors=BANK_SIZE,seed=BANK_SEED
     )
@@ -325,6 +325,8 @@ def run(args):
     write_csv(out/"summary.csv",list(methods))
     conf={
         "protocol":"artifacts/beacon_charactertrajectories_transfer_gate_preregistered_2026-11-22.md",
+        "preinference_amendment_A1":"artifacts/beacon_charactertrajectories_amendment_A1_eq119_2026-11-22.md",
+        "actual_timepoints":119,
         "model_type":"ExtraTrees",
         "dataset":"UEA CharacterTrajectories _eq",
         "archive_source_was_unequal_length":True,
